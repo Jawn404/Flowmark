@@ -137,6 +137,8 @@ button{font-family:inherit;cursor:pointer}
 /* ---------- Modal (PDF import) ---------- */
 .modal-backdrop,.sheet-backdrop{position:fixed;inset:0;background:rgba(8,14,20,.55);backdrop-filter:blur(3px);
   z-index:50;display:flex;align-items:center;justify-content:center;padding:20px}
+/* The hidden attribute must beat the display:flex above, or the overlays never hide */
+.modal-backdrop[hidden],.sheet-backdrop[hidden]{display:none}
 .modal{background:#fff;color:var(--text-dark);border-radius:12px;width:min(620px,96vw);max-height:86vh;
   display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.4)}
 .modal header{display:flex;align-items:center;padding:16px 18px;border-bottom:1px solid var(--panel-line)}
