@@ -1,0 +1,17 @@
+{
+  "name": "FlowMark — Water System Schematics",
+  "short_name": "FlowMark",
+  "description": "Draw water system schematics for Legionella Risk Assessments. Place assets, connect pipework, import report PDFs, export to PDF/JPG. Works offline.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#16202c",
+  "theme_color": "#16202c",
+  "categories": ["productivity", "utilities", "business"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

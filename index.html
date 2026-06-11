@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#16202c">
+<title>FlowMark — Water System Schematics</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="description" content="Draw water system schematics for Legionella Risk Assessments. Works offline on any device.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== Top bar ===== -->
+  <header id="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 2.5c3.6 4.2 6 7.4 6 10.4a6 6 0 0 1-12 0c0-3 2.4-6.2 6-10.4Z" fill="#38bdf8"/><path d="M9.2 12.8c0 1.7 1.2 3 2.8 3.2" stroke="#fff" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".85"/></svg>
+      <span>FlowMark</span>
+    </div>
+    <div class="filename" id="projectName" title="Project name — click to rename">Untitled schematic</div>
+    <div class="top-actions">
+      <button class="tb" id="btnNew" title="Start a new schematic">New</button>
+      <button class="tb" id="btnOpen" title="Open a saved project file">Open</button>
+      <button class="tb" id="btnSave" title="Save project to a file">Save</button>
+      <span class="sep"></span>
+      <button class="tb" id="btnImport" title="Import a Legionella report PDF and detect assets">Import PDF</button>
+      <span class="sep"></span>
+      <button class="tb" id="btnExportPdf" title="Export the schematic to PDF">PDF</button>
+      <button class="tb" id="btnExportImg" title="Export the schematic to a JPG image">JPG</button>
+      <span class="sep"></span>
+      <button class="tb icon-only" id="btnMenu" title="More" aria-label="More">⋯</button>
+    </div>
+  </header>
+
+  <div id="workspace">
+
+    <!-- ===== Left palette ===== -->
+    <aside id="palette" aria-label="Tools and assets">
+      <div class="pal-group">
+        <div class="pal-title">Tools</div>
+        <div class="pal-grid">
+          <button class="tool" data-tool="select" title="Select & move (V)"><span class="ico">↖</span><span class="lbl">Select</span></button>
+          <button class="tool" data-tool="pan" title="Pan the view (H / hold Space)"><span class="ico">✋</span><span class="lbl">Pan</span></button>
+          <button class="tool" data-tool="zone" title="Draw a floor / area zone (Z)"><span class="ico">▢</span><span class="lbl">Area</span></button>
+          <button class="tool" data-tool="text" title="Add a text label (T)"><span class="ico">T</span><span class="lbl">Label</span></button>
+        </div>
+      </div>
+
+      <div class="pal-group">
+        <div class="pal-title">Pipework</div>
+        <div class="pal-grid">
+          <button class="tool pipe" data-tool="pipe" data-pipe="coldMains" title="Cold — mains supply"><span class="ico line cold-mains"></span><span class="lbl">Cold mains</span></button>
+          <button class="tool pipe" data-tool="pipe" data-pipe="coldTank" title="Cold — from tank / down service"><span class="ico line cold-tank"></span><span class="lbl">Cold tank</span></button>
+          <button class="tool pipe" data-tool="pipe" data-pipe="hotFlow" title="Hot — flow"><span class="ico line hot-flow"></span><span class="lbl">Hot flow</span></button>
+          <button class="tool pipe" data-tool="pipe" data-pipe="hotReturn" title="Hot — return"><span class="ico line hot-return"></span><span class="lbl">Hot return</span></button>
+          <button class="tool pipe" data-tool="pipe" data-pipe="deadleg" title="Deadleg pipework"><span class="ico line deadleg"></span><span class="lbl">Deadleg</span></button>
+        </div>
+      </div>
+
+      <div class="pal-group">
+        <div class="pal-title">Assets</div>
+        <div class="pal-grid">
+          <button class="tool asset" data-tool="asset" data-asset="tank" title="Cold water storage tank"><span class="ico">▭</span><span class="lbl">CWST</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="heater" title="Water heater / calorifier"><span class="ico">◫</span><span class="lbl">Heater</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="pump" title="Pump"><span class="ico">⊙</span><span class="lbl">Pump</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="tmv" title="Thermostatic mixing valve"><span class="ico">Ⓣ</span><span class="lbl">TMV</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="mixer" title="Mixer tap"><span class="ico">Ⓜ</span><span class="lbl">Mixer</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="shower" title="Shower"><span class="ico">⌁</span><span class="lbl">Shower</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="outlet" title="Outlet / tap"><span class="ico">○</span><span class="lbl">Outlet</span></button>
+          <button class="tool asset" data-tool="asset" data-asset="cap" title="Capped / blanked end (deadleg)"><span class="ico">⊣</span><span class="lbl">Cap</span></button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===== Canvas ===== -->
+    <main id="stage">
+      <canvas id="canvas"></canvas>
+
+      <!-- Floating zoom / view controls -->
+      <div class="view-ctrls">
+        <button id="zoomOut" title="Zoom out">−</button>
+        <button id="zoomLevel" title="Reset zoom to 100%">100%</button>
+        <button id="zoomIn" title="Zoom in">+</button>
+        <button id="zoomFit" title="Fit drawing to screen">Fit</button>
+        <button id="toggleGrid" class="active" title="Toggle grid">Grid</button>
+        <button id="toggleSnap" class="active" title="Toggle snap to grid">Snap</button>
+        <button id="toggleLegend" class="active" title="Toggle legend on drawing">Legend</button>
+      </div>
+
+      <div class="hint" id="hint"></div>
+    </main>
+
+    <!-- ===== Right properties panel ===== -->
+    <aside id="inspector" aria-label="Properties">
+      <div class="insp-empty" id="inspEmpty">
+        <p>Nothing selected.</p>
+        <p class="muted">Pick a tool on the left, drop assets onto the grid, then draw pipework between them. Select anything here to edit its label and details.</p>
+      </div>
+      <div id="inspBody" hidden></div>
+    </aside>
+
+  </div>
+
+  <!-- ===== Status bar ===== -->
+  <footer id="statusbar">
+    <span id="statusTool">Select</span>
+    <span id="statusCoords">—</span>
+    <span class="grow"></span>
+    <span id="statusCounts">0 assets · 0 pipes</span>
+    <span id="statusSaved" class="saved">Saved</span>
+  </footer>
+
+</div>
+
+<!-- ===== Hidden file inputs ===== -->
+<input type="file" id="fileOpen" accept=".json,.flowmark,application/json" hidden>
+<input type="file" id="filePdf" accept="application/pdf,.pdf" hidden>
+
+<!-- ===== PDF import review modal ===== -->
+<div class="modal-backdrop" id="importModal" hidden>
+  <div class="modal">
+    <header><h2>Detected assets</h2><button class="x" id="importClose">✕</button></header>
+    <div class="modal-body" id="importBody"></div>
+    <footer>
+      <span class="muted" id="importSummary"></span>
+      <span class="grow"></span>
+      <button class="tb" id="importCancel">Cancel</button>
+      <button class="tb primary" id="importPlace">Place on canvas</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ===== Generic menu sheet ===== -->
+<div class="sheet-backdrop" id="menuSheet" hidden>
+  <div class="sheet">
+    <button data-act="install" id="menuInstall">Install app on this device</button>
+    <button data-act="clear">Clear the canvas</button>
+    <button data-act="sample">Load a sample layout</button>
+    <button data-act="help">Quick guide</button>
+    <button data-act="about">About FlowMark</button>
+  </div>
+</div>
+
+<!-- ===== Toast ===== -->
+<div id="toast" hidden></div>
+
+<!-- Libraries loaded lazily from CDN when needed (PDF import / export). -->
+<script src="app.js"></script>
+</body>
+</html>
