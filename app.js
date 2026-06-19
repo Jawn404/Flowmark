@@ -318,13 +318,19 @@ function drawNode(c, n, S, OX, OY) {
       const r = w / 2;
       c.fillStyle = '#fff'; c.strokeStyle = '#33485f'; c.lineWidth = 1.6;
       c.beginPath(); c.arc(cx, cy, r, 0, 7); c.fill(); c.stroke();
-      // inverted equilateral triangle inscribed in the circle, apex at the bottom
+      // Equilateral triangle inscribed in the circle — its apex is the flow
+      // arrow. n.rot (degrees, 0 = apex pointing down) spins it to match the
+      // direction of flow. The circle is symmetric so only the arrow turns.
+      c.save();
+      c.translate(cx, cy);
+      c.rotate((n.rot || 0) * Math.PI / 180);
       c.beginPath();
-      c.moveTo(cx - r * 0.866, cy - r * 0.5);
-      c.lineTo(cx + r * 0.866, cy - r * 0.5);
-      c.lineTo(cx, cy + r);
+      c.moveTo(-r * 0.866, -r * 0.5);
+      c.lineTo(r * 0.866, -r * 0.5);
+      c.lineTo(0, r);
       c.closePath();
       c.stroke();
+      c.restore();
       break;
     }
     case 'tmv': case 'mixer': {
@@ -886,6 +892,8 @@ function renderInspector() {
     const a = ASSETS[n.type];
     h += `<div class="insp-head"><span class="badge">${a.tag || '•'}</span><h3>${a.name}</h3></div>`;
     h += row('Label', `<input class="i-label" value="${esc(n.label)}">`, 'mono');
+    if (n.type === 'pump')
+      h += row('Flow direction', `<div class="rot-row"><button type="button" class="i-rot-btn" title="Rotate 90°">⟳ 90°</button><input class="i-rot" type="number" value="${n.rot || 0}" step="15" min="0" max="359"><span class="rot-unit">°</span></div>`);
     if (a.fields.includes('volume'))
       h += row('Volume (litres)', `<input class="i-vol" type="number" value="${n.props.volume || ''}" placeholder="e.g. 240">`);
     if (n.type === 'tank' || n.type === 'heater')
@@ -924,12 +932,20 @@ function riskRow(cur) {
 }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
+/* Normalise a rotation value to an integer 0–359. */
+function normRot(v) { let r = Math.round(+v || 0) % 360; if (r < 0) r += 360; return r; }
+/* Rotate a node by a delta (degrees), snapshot + commit so it's undoable. */
+function rotateNode(n, delta) { mutate(() => { n.rot = normRot((n.rot || 0) + delta); }); renderInspector(); }
+
 function wireInspector() {
   const body = $('#inspBody');
   const set = (sels, ev, fn) => { const el = $(sels, body); if (el) el.addEventListener(ev, fn); };
   if (sel.kind === 'node') {
     const n = nodeById(sel.id);
     set('.i-label', 'input', e => { n.label = e.target.value; dirty = true; draw(); });
+    set('.i-rot', 'input', e => { n.rot = normRot(e.target.value); dirty = true; draw(); });
+    set('.i-rot', 'change', e => { n.rot = normRot(e.target.value); e.target.value = n.rot; commit(); });
+    set('.i-rot-btn', 'click', () => rotateNode(n, 90));
     set('.i-vol', 'input', e => { n.props.volume = e.target.value; dirty = true; draw(); });
     set('.i-loc', 'input', e => { n.props.location = e.target.value; dirty = true; });
     set('.i-notes', 'input', e => { n.props.notes = e.target.value; dirty = true; });
@@ -1491,7 +1507,7 @@ $('#menuSheet').addEventListener('click', e => {
   closeMenu();
   if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -1518,6 +1534,10 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
   if (!e.ctrlKey && !e.metaKey) {
     const k = e.key.toLowerCase();
+    if (k === 'r' && sel && sel.kind === 'node') {
+      const n = nodeById(sel.id);
+      if (n && n.type === 'pump') { e.preventDefault(); rotateNode(n, 90); return; }
+    }
     if (k === 'v') setTool('select'); else if (k === 'h') setTool('pan');
     else if (k === 'p') setTool('pipe', { pipe: pipeKind }); else if (k === 'z') setTool('zone');
     else if (k === 't') setTool('text');
