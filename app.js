@@ -208,10 +208,16 @@ function drawNode(c, n, S, OX, OY) {
       break;
     }
     case 'pump': {
+      const r = w / 2;
       c.fillStyle = '#fff'; c.strokeStyle = '#33485f'; c.lineWidth = 1.6;
-      c.beginPath(); c.arc(cx, cy, w / 2, 0, 7); c.fill(); c.stroke();
-      c.fillStyle = '#33485f'; c.beginPath();
-      c.moveTo(cx - w * .18, cy - h * .22); c.lineTo(cx - w * .18, cy + h * .22); c.lineTo(cx + w * .26, cy); c.closePath(); c.fill();
+      c.beginPath(); c.arc(cx, cy, r, 0, 7); c.fill(); c.stroke();
+      // inverted equilateral triangle inscribed in the circle, apex at the bottom
+      c.beginPath();
+      c.moveTo(cx - r * 0.866, cy - r * 0.5);
+      c.lineTo(cx + r * 0.866, cy - r * 0.5);
+      c.lineTo(cx, cy + r);
+      c.closePath();
+      c.stroke();
       break;
     }
     case 'tmv': case 'mixer': {
