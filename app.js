@@ -9,17 +9,6 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const uid = () => Math.random().toString(36).slice(2, 9);
 const GRID = 20;
 
-/* ---------- Page (printable sheet) ----------
-   World units == CSS px @96dpi. A4 is ~1.414:1; we use 1120×800 so the sheet
-   lands on whole grid cells (56×40). The page sits at world origin (0,0). */
-const A4 = { long: 1120, short: 800 };
-function pageDims() {
-  return (state.page && state.page.orientation === 'portrait')
-    ? { w: A4.short, h: A4.long }
-    : { w: A4.long, h: A4.short };
-}
-function pageBounds() { const d = pageDims(); return { x: 0, y: 0, w: d.w, h: d.h }; }
-
 /* ---------- Asset & pipe definitions ---------- */
 const ASSETS = {
   tank:   { w: 84, h: 54, name: 'Cold water storage tank', tag: 'TK', fields: ['volume', 'risk'] },
@@ -36,7 +25,7 @@ const PIPES = {
   coldTank:  { color: '#2563eb', width: 2,   dash: [7, 5], name: 'Cold — tank' },
   hotFlow:   { color: '#dc2626', width: 2,   dash: [],     name: 'Hot — flow' },
   hotReturn: { color: '#dc2626', width: 2,   dash: [7, 5], name: 'Hot — return' },
-  deadleg:   { color: '#e08a00', width: 3,   dash: [3, 5], name: 'Deadleg' },
+  deadleg:   { color: '#000000', width: 3,   dash: [],     name: 'Deadleg' },
 };
 const RISK = { A: '#16a34a', B: '#65a30d', C: '#d97706', D: '#ea580c', E: '#dc2626' };
 const ZONE_COLORS = ['#e0f2fe', '#dcfce7', '#fef9c3', '#fae8ff', '#ffedd5', '#e2e8f0'];
@@ -44,7 +33,7 @@ const ZONE_COLORS = ['#e0f2fe', '#dcfce7', '#fef9c3', '#fae8ff', '#ffedd5', '#e2
 /* ---------- State ---------- */
 let state = blankState();
 function blankState() {
-  return { name: 'Untitled schematic', page: { orientation: 'landscape' }, zones: [], nodes: [], pipes: [], texts: [] };
+  return { name: 'Untitled schematic', zones: [], nodes: [], pipes: [], texts: [] };
 }
 let view = { scale: 1, ox: 0, oy: 0 };
 let tool = 'select';
@@ -196,35 +185,13 @@ function draw() {
   const W = canvas.width, H = canvas.height;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  if (showGrid) drawGrid();
   const cssW = W / dpr, cssH = H / dpr;
-  drawDesk(cssW, cssH);          // neutral surface behind the sheet
-  drawPage();                    // white A4 sheet (shadow + border)
-  if (showGrid) drawGrid();      // grid is clipped to the sheet
   drawScene(ctx, view, { legend: showLegend, legendXY: [14, cssH - 14] });
   if (sel) drawSelection();
   if (group.length) drawSelection();
   if (drag && drag.mode === 'marquee') drawMarquee();
   if (draft) drawDraft();
-}
-
-/* The "desk" — everything outside the page reads as off-sheet. */
-function drawDesk(cssW, cssH) {
-  ctx.fillStyle = '#e7edf3';
-  ctx.fillRect(0, 0, cssW, cssH);
-}
-
-/* The printable A4 sheet at world origin, drawn as paper with a soft shadow. */
-function drawPage() {
-  const d = pageDims();
-  const x = sx(0), y = sy(0), w = d.w * view.scale, h = d.h * view.scale;
-  ctx.save();
-  ctx.shadowColor = 'rgba(15,30,50,.18)';
-  ctx.shadowBlur = 18; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 6;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(x, y, w, h);
-  ctx.restore();
-  ctx.strokeStyle = '#c2cedb'; ctx.lineWidth = 1;
-  ctx.strokeRect(x + .5, y + .5, Math.round(w), Math.round(h));
 }
 
 function drawMarquee() {
@@ -242,12 +209,6 @@ function drawGrid() {
   const cssW = canvas.width / dpr, cssH = canvas.height / dpr;
   const step = GRID * view.scale;
   if (step < 6) return;
-  // Confine the grid to the sheet so the page edge stays legible.
-  const d = pageDims();
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(sx(0), sy(0), d.w * view.scale, d.h * view.scale);
-  ctx.clip();
   const x0 = ((view.ox % step) + step) % step;
   const y0 = ((view.oy % step) + step) % step;
   ctx.lineWidth = 1;
@@ -264,7 +225,6 @@ function drawGrid() {
   for (let x = bx; x < cssW; x += big) { ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, cssH); }
   for (let y = by; y < cssH; y += big) { ctx.moveTo(0, y + .5); ctx.lineTo(cssW, y + .5); }
   ctx.stroke();
-  ctx.restore();
 }
 
 /* Reusable scene render. T maps world->device-css px. */
@@ -1180,19 +1140,6 @@ $('#zoomFit').onclick = fitView;
 $('#toggleGrid').onclick = e => { showGrid = !showGrid; e.currentTarget.classList.toggle('active', showGrid); draw(); };
 $('#toggleSnap').onclick = e => { snapOn = !snapOn; e.currentTarget.classList.toggle('active', snapOn); };
 $('#toggleLegend').onclick = e => { showLegend = !showLegend; e.currentTarget.classList.toggle('active', showLegend); draw(); };
-$('#togglePage').onclick = () => {
-  mutate(() => {
-    state.page ||= { orientation: 'landscape' };
-    state.page.orientation = state.page.orientation === 'portrait' ? 'landscape' : 'portrait';
-  });
-  // Re-frame so the re-proportioned sheet stays fully in view.
-  fitView();
-};
-function updatePageBtn() {
-  const portrait = state.page && state.page.orientation === 'portrait';
-  const b = $('#togglePage');
-  if (b) b.textContent = portrait ? 'Portrait' : 'Landscape';
-}
 function updateZoomLabel() { $('#zoomLevel').textContent = Math.round(view.scale * 100) + '%'; }
 
 function contentBounds(pad = 60) {
@@ -1205,14 +1152,7 @@ function contentBounds(pad = 60) {
   return { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad, w: Math.max(...xs) - Math.min(...xs) + pad * 2, h: Math.max(...ys) - Math.min(...ys) + pad * 2 };
 }
 function fitView() {
-  const p = pageBounds(), pad = 40;
-  let b = { x: p.x - pad, y: p.y - pad, w: p.w + pad * 2, h: p.h + pad * 2 };
-  const c = contentBounds();
-  if (c) {
-    const minx = Math.min(b.x, c.x), miny = Math.min(b.y, c.y);
-    const maxx = Math.max(b.x + b.w, c.x + c.w), maxy = Math.max(b.y + b.h, c.y + c.h);
-    b = { x: minx, y: miny, w: maxx - minx, h: maxy - miny };
-  }
+  const b = contentBounds(); if (!b) { view = { scale: 1, ox: 60, oy: 60 }; updateZoomLabel(); return draw(); }
   const cssW = canvas.width / dpr, cssH = canvas.height / dpr;
   const s = Math.min(cssW / b.w, cssH / b.h, 2.5);
   view.scale = Math.max(.2, s);
@@ -1224,7 +1164,7 @@ function fitView() {
 /* ============================================================
    STATUS / HINTS
    ============================================================ */
-function updateStatus() { updatePageBtn(); $('#statusCounts').textContent = `${state.nodes.length} assets · ${state.pipes.length} pipes`; $('#statusSaved').textContent = dirty ? 'Unsaved' : 'Saved'; $('#statusSaved').classList.toggle('unsaved', dirty); $('#projectName').textContent = state.name; }
+function updateStatus() { $('#statusCounts').textContent = `${state.nodes.length} assets · ${state.pipes.length} pipes`; $('#statusSaved').textContent = dirty ? 'Unsaved' : 'Saved'; $('#statusSaved').classList.toggle('unsaved', dirty); $('#projectName').textContent = state.name; }
 function updateCoords(w) { $('#statusCoords').textContent = `${Math.round(w.x)}, ${Math.round(w.y)}`; }
 let hintTimer;
 function hint(msg) { const el = $('#hint'); clearTimeout(hintTimer); if (!msg) { el.classList.remove('show'); return; } el.textContent = msg; el.classList.add('show'); }
@@ -1237,7 +1177,7 @@ const LS_KEY = 'flowmark.project.v1';
 let saveTimer;
 function autosave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { } }, 400); }
 function loadAutosave() { try { const s = localStorage.getItem(LS_KEY); if (s) { state = normalize(JSON.parse(s)); return true; } } catch (e) { } return false; }
-function normalize(s) { s.zones ||= []; s.nodes ||= []; s.pipes ||= []; s.texts ||= []; s.page ||= { orientation: 'landscape' }; if (s.page.orientation !== 'portrait') s.page.orientation = 'landscape'; s.name ||= 'Untitled schematic'; for (const n of s.nodes) n.props ||= {}; return s; }
+function normalize(s) { s.zones ||= []; s.nodes ||= []; s.pipes ||= []; s.texts ||= []; s.name ||= 'Untitled schematic'; for (const n of s.nodes) n.props ||= {}; return s; }
 
 $('#btnSave').onclick = () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -1251,7 +1191,7 @@ $('#fileOpen').onchange = e => {
   rd.onload = () => { try { state = normalize(JSON.parse(rd.result)); sel = null; renderInspector(); fitView(); updateStatus(); dirty = false; toast('Project opened'); } catch (err) { toast('That file could not be read'); } };
   rd.readAsText(f); e.target.value = '';
 };
-$('#btnNew').onclick = () => { if (dirty && !confirm('Start a new schematic? Unsaved changes will be lost.')) return; state = blankState(); sel = null; renderInspector(); dirty = false; updateStatus(); fitView(); };
+$('#btnNew').onclick = () => { if (dirty && !confirm('Start a new schematic? Unsaved changes will be lost.')) return; state = blankState(); sel = null; renderInspector(); view = { scale: 1, ox: 60, oy: 60 }; updateZoomLabel(); dirty = false; updateStatus(); draw(); };
 
 $('#projectName').onclick = () => { const v = prompt('Project name:', state.name); if (v != null) { state.name = v.trim() || 'Untitled schematic'; dirty = true; updateStatus(); } };
 
@@ -1265,8 +1205,7 @@ function renderExportCanvas(ss = 2.5, compose = 1) {
   // compose = world->css scale the scene is composed at. Kept at 1 (100%) so the
   //           text:geometry ratio matches the on-screen app, since label/line sizes
   //           use Math.min(S, cap) clamps that only stay proportional while S <= cap.
-  if (!contentBounds(0)) { toast('Nothing on the page to export yet'); return null; }
-  const b = pageBounds();   // export exactly the A4 sheet, in its chosen orientation
+  const b = contentBounds(50); if (!b) { toast('Nothing to export yet'); return null; }
   const cw = Math.ceil(b.w * compose), ch = Math.ceil(b.h * compose);
   const c = document.createElement('canvas');
   c.width = Math.ceil(cw * ss); c.height = Math.ceil(ch * ss);
@@ -1274,8 +1213,7 @@ function renderExportCanvas(ss = 2.5, compose = 1) {
   cx.setTransform(ss, 0, 0, ss, 0, 0);                 // uniform supersample for crisp output
   cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cw, ch);
   const T = { scale: compose, ox: -b.x * compose, oy: -b.y * compose };
-  // scene (composed at 100% => WYSIWYG label sizing). Anything off the sheet is
-  // naturally clipped by the canvas bounds, matching what the page boundary shows.
+  // scene (composed at 100% => WYSIWYG label sizing)
   drawScene(cx, T, { legend: showLegend, legendXY: [16, ch - 16] });
   // footer caption — drawn in raw device px so it stays a small, fixed-size caption
   cx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1300,7 +1238,7 @@ $('#btnExportPdf').onclick = async () => {
   toast('Building PDF…', 1500);
   try {
     const jsPDF = await ensureJsPDF();
-    const landscape = pageDims().w >= pageDims().h;
+    const landscape = r.canvas.width >= r.canvas.height;
     const pdf = new jsPDF({ orientation: landscape ? 'l' : 'p', unit: 'mm', format: 'a4' });
     const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
     const margin = 8;
@@ -1660,7 +1598,7 @@ function init() {
   setTool('select');
   updateZoomLabel(); updateStatus();
   if (restored && (state.nodes.length || state.zones.length)) fitView();
-  else { fitView(); }
+  else { view = { scale: 1, ox: 60, oy: 60 }; draw(); }
   window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 }
 init();

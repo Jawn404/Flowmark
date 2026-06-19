@@ -10,7 +10,6 @@
   --ink-3:#27374a;
   --line:#33485f;
   --paper:#fbfcfd;        /* drawing surface */
-  --desk:#e7edf3;         /* off-sheet surround behind the A4 page */
   --grid:#e4eaf0;
   --grid-strong:#d2dbe5;
   --panel:#f1f5f9;
@@ -87,10 +86,10 @@ button{font-family:inherit;cursor:pointer}
 .cold-tank::after{border-top:2.5px dotted var(--cold)}
 .hot-flow::after{border-top:2.5px solid var(--hot)}
 .hot-return::after{border-top:2.5px dashed var(--hot)}
-.deadleg::after{border-top:3px dashed var(--deadleg)}
+.deadleg::after{border-top:3px solid #000}
 
 /* ---------- Stage / canvas ---------- */
-#stage{position:relative;flex:1;min-width:0;background:var(--desk);overflow:hidden;touch-action:none}
+#stage{position:relative;flex:1;min-width:0;background:var(--paper);overflow:hidden;touch-action:none}
 #canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .view-ctrls{position:absolute;left:12px;bottom:12px;display:flex;gap:4px;background:rgba(22,32,44,.92);
   backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 4px 14px rgba(0,0,0,.25)}
@@ -98,7 +97,6 @@ button{font-family:inherit;cursor:pointer}
   padding:6px 9px;border-radius:5px;min-width:34px}
 .view-ctrls button:hover{background:rgba(255,255,255,.08);color:#fff}
 .view-ctrls button.active{color:var(--accent)}
-.view-ctrls .vc-sep{width:1px;align-self:stretch;margin:4px 2px;background:rgba(255,255,255,.14)}
 #zoomLevel{min-width:48px;font-variant-numeric:tabular-nums}
 .hint{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:rgba(22,32,44,.95);
   color:#dbe7f1;font-size:12.5px;padding:7px 14px;border-radius:20px;border:1px solid var(--line);
