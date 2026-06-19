@@ -623,6 +623,8 @@ function startGroupDrag(w) {
 const pointers = new Map();
 let drag = null;       // active drag descriptor
 let pinch = null;
+let pointerWorldPos = null;   // last cursor position in world coords (for paste-at-cursor)
+let pointerInCanvas = false;  // is the cursor currently over the canvas?
 
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
@@ -638,6 +640,7 @@ canvas.addEventListener('pointermove', e => {
 });
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('pointerleave', () => { pointerInCanvas = false; });
 function endPointer(e) {
   pointers.delete(e.pointerId);
   if (pinch && pointers.size < 2) pinch = null;
@@ -727,6 +730,7 @@ function onDown(e) {
 
 function onMove(e) {
   const w = pointerWorld(e);
+  pointerWorldPos = w; pointerInCanvas = true;
   updateCoords(w);
 
   if (tool === 'pipe' && draft) {
@@ -975,6 +979,120 @@ function deleteSelected() {
     else if (sel.kind === 'text') state.texts = state.texts.filter(t => t.id !== sel.id);
     select(null);
   });
+}
+
+/* ============================================================
+   CLIPBOARD (in-app copy / paste of selected items)
+   ============================================================ */
+const cloneObj = o => JSON.parse(JSON.stringify(o));
+let clipboard = null;   // { nodes, pipes, zones, texts } — self-contained snapshot of a selection
+let pasteSeq = 0;       // grows per offset-paste so repeated pastes cascade instead of stacking
+
+/* The current selection as a flat list of refs, whether single or grouped. */
+function selectionRefs() {
+  if (group.length) return group.slice();
+  if (sel) return [sel];
+  return [];
+}
+
+const clipboardCount = () =>
+  clipboard ? clipboard.nodes.length + clipboard.pipes.length + clipboard.zones.length + clipboard.texts.length : 0;
+
+/* Snapshot the current selection into the in-app clipboard. Returns item count. */
+function captureToClipboard() {
+  const refs = selectionRefs();
+  if (!refs.length) return 0;
+  const ids = { node: new Set(), pipe: new Set(), zone: new Set(), text: new Set() };
+  for (const r of refs) ids[r.kind] && ids[r.kind].add(r.id);
+  clipboard = {
+    nodes: state.nodes.filter(n => ids.node.has(n.id)).map(cloneObj),
+    pipes: state.pipes.filter(p => ids.pipe.has(p.id)).map(cloneObj),
+    zones: state.zones.filter(z => ids.zone.has(z.id)).map(cloneObj),
+    texts: state.texts.filter(t => ids.text.has(t.id)).map(cloneObj),
+  };
+  pasteSeq = 0;   // next offset-paste starts one step from the originals
+  return clipboardCount();
+}
+
+function copySelection() {
+  const total = captureToClipboard();
+  if (!total) return;
+  toast(`Copied ${total} item${total > 1 ? 's' : ''}`);
+}
+
+function cutSelection() {
+  const total = captureToClipboard();
+  if (!total) return;
+  deleteSelected();   // own snapshot/undo step; clipboard already holds the copy
+  toast(`Cut ${total} item${total > 1 ? 's' : ''}`);
+}
+
+/* World-space bounding box of everything on the clipboard (for cursor paste). */
+function clipboardBounds() {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  const ext = (ax, ay, bx, by) => { if (ax < x1) x1 = ax; if (ay < y1) y1 = ay; if (bx > x2) x2 = bx; if (by > y2) y2 = by; };
+  for (const n of clipboard.nodes) ext(n.x - n.w / 2, n.y - n.h / 2, n.x + n.w / 2, n.y + n.h / 2);
+  for (const p of clipboard.pipes) for (const pt of p.pts) ext(pt.x, pt.y, pt.x, pt.y);
+  for (const z of clipboard.zones) ext(z.x, z.y, z.x + z.w, z.y + z.h);
+  for (const t of clipboard.texts) { const m = textBlock(t); ext(t.x, t.y - m.ascent, t.x + m.w, t.y - m.ascent + m.h); }
+  return x1 === Infinity ? null : { x1, y1, x2, y2 };
+}
+
+function pasteClipboard() {
+  if (!clipboardCount()) return;
+
+  // Drop the copy under the cursor when it's over the canvas; otherwise (e.g. a
+  // keyboard paste with the mouse elsewhere) fall back to a cascading offset.
+  let dx, dy;
+  const b = clipboardBounds();
+  if (pointerInCanvas && pointerWorldPos && b) {
+    const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2;
+    dx = snap(pointerWorldPos.x - cx); dy = snap(pointerWorldPos.y - cy);
+    pasteSeq = 0;
+  } else {
+    dx = dy = GRID * 2 * (++pasteSeq);
+  }
+
+  mutate(() => {
+    const idMap = new Map();   // original node id → new node id (for re-wiring pipes)
+    const placed = [];
+
+    for (const n of clipboard.nodes) {
+      const nn = cloneObj(n); nn.id = uid();
+      nn.x = snap(n.x + dx); nn.y = snap(n.y + dy);
+      idMap.set(n.id, nn.id);
+      state.nodes.push(nn); placed.push({ kind: 'node', id: nn.id });
+    }
+
+    for (const p of clipboard.pipes) {
+      const np = cloneObj(p); np.id = uid();
+      np.pts = np.pts.map(pt => {
+        const out = { x: snap(pt.x + dx), y: snap(pt.y + dy) };
+        // Keep the connection only if its asset was copied too; otherwise the
+        // endpoint becomes a free point so the paste doesn't snap onto the original.
+        if (pt.node && idMap.has(pt.node)) out.node = idMap.get(pt.node);
+        return out;
+      });
+      state.pipes.push(np); placed.push({ kind: 'pipe', id: np.id });
+    }
+
+    for (const z of clipboard.zones) {
+      const nz = cloneObj(z); nz.id = uid();
+      nz.x = snap(z.x + dx); nz.y = snap(z.y + dy);
+      state.zones.unshift(nz); placed.push({ kind: 'zone', id: nz.id });
+    }
+
+    for (const t of clipboard.texts) {
+      const nt = cloneObj(t); nt.id = uid();
+      nt.x = snap(t.x + dx); nt.y = snap(t.y + dy);
+      state.texts.push(nt); placed.push({ kind: 'text', id: nt.id });
+    }
+
+    if (placed.length === 1) select(placed[0]);
+    else setGroup(placed);
+  });
+  const total = clipboardCount();
+  toast(`Pasted ${total} item${total > 1 ? 's' : ''}`);
 }
 
 /* ============================================================
@@ -1373,7 +1491,7 @@ $('#menuSheet').addEventListener('click', e => {
   closeMenu();
   if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · Del delete · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -1395,6 +1513,9 @@ window.addEventListener('keydown', e => {
   if ((e.key === 'Delete' || e.key === 'Backspace') && (sel || group.length)) { e.preventDefault(); deleteSelected(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); cutSelection(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
   if (!e.ctrlKey && !e.metaKey) {
     const k = e.key.toLowerCase();
     if (k === 'v') setTool('select'); else if (k === 'h') setTool('pan');
