@@ -788,17 +788,24 @@ function download(blob, name) { const u = URL.createObjectURL(blob); const a = d
 /* ============================================================
    EXPORT  (JPG + PDF)
    ============================================================ */
-function renderExportCanvas(scale = 2.5) {
+function renderExportCanvas(ss = 2.5, compose = 1) {
+  // ss      = supersample factor — output resolution / crispness only.
+  // compose = world->css scale the scene is composed at. Kept at 1 (100%) so the
+  //           text:geometry ratio matches the on-screen app, since label/line sizes
+  //           use Math.min(S, cap) clamps that only stay proportional while S <= cap.
   const b = contentBounds(50); if (!b) { toast('Nothing to export yet'); return null; }
+  const cw = Math.ceil(b.w * compose), ch = Math.ceil(b.h * compose);
   const c = document.createElement('canvas');
-  c.width = Math.ceil(b.w * scale); c.height = Math.ceil(b.h * scale);
+  c.width = Math.ceil(cw * ss); c.height = Math.ceil(ch * ss);
   const cx = c.getContext('2d');
-  cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, c.width, c.height);
-  const T = { scale, ox: -b.x * scale, oy: -b.y * scale };
-  // title strip
-  drawScene(cx, T, { legend: showLegend, legendXY: [16, c.height - 16] });
-  // footer caption
-  cx.fillStyle = '#475569'; cx.font = `${13 * (scale / 2.5)}px system-ui`; cx.textAlign = 'right'; cx.textBaseline = 'bottom';
+  cx.setTransform(ss, 0, 0, ss, 0, 0);                 // uniform supersample for crisp output
+  cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cw, ch);
+  const T = { scale: compose, ox: -b.x * compose, oy: -b.y * compose };
+  // scene (composed at 100% => WYSIWYG label sizing)
+  drawScene(cx, T, { legend: showLegend, legendXY: [16, ch - 16] });
+  // footer caption — drawn in raw device px so it stays a small, fixed-size caption
+  cx.setTransform(1, 0, 0, 1, 0, 0);
+  cx.fillStyle = '#475569'; cx.font = `${13 * (ss / 2.5)}px system-ui`; cx.textAlign = 'right'; cx.textBaseline = 'bottom';
   cx.fillText(`${state.name}   ·   ${new Date().toLocaleDateString('en-GB')}`, c.width - 16, c.height - 8);
   return { canvas: c, bounds: b };
 }
