@@ -79,6 +79,39 @@ function pointerWorld(e) {
 const nodeById = id => state.nodes.find(n => n.id === id);
 function ptPos(pt) { if (pt.node) { const n = nodeById(pt.node); if (n) return { x: n.x, y: n.y }; } return { x: pt.x, y: pt.y }; }
 
+/* Where a pipe should meet an asset: a point on the asset's bounding-box
+   edge facing the approaching segment, rather than its centre. When the
+   approach lines up with a face it gives a clean perpendicular join (the
+   orthogonal look); otherwise it clips the centre→approach ray to the box. */
+function edgePoint(n, from) {
+  const cx = n.x, cy = n.y, hw = n.w / 2, hh = n.h / 2;
+  const dx = from.x - cx, dy = from.y - cy;
+  if (!dx && !dy) return { x: cx, y: cy };
+  const horiz = Math.abs(dx) / hw >= Math.abs(dy) / hh;
+  if (horiz) {
+    if (from.y >= cy - hh && from.y <= cy + hh) return { x: cx + Math.sign(dx) * hw, y: from.y };
+  } else {
+    if (from.x >= cx - hw && from.x <= cx + hw) return { x: from.x, y: cy + Math.sign(dy) * hh };
+  }
+  const tx = dx ? hw / Math.abs(dx) : Infinity;
+  const ty = dy ? hh / Math.abs(dy) : Infinity;
+  const t = Math.min(tx, ty);
+  return { x: cx + dx * t, y: cy + dy * t };
+}
+
+/* Resolve a list of pipe point descriptors to world positions, snapping any
+   node-bound point to the asset edge facing its neighbour. */
+function resolvePipePts(pts) {
+  const raw = pts.map(ptPos);
+  return pts.map((pt, i) => {
+    if (!pt.node) return raw[i];
+    const n = nodeById(pt.node);
+    if (!n) return raw[i];
+    const ref = raw[i - 1] || raw[i + 1];
+    return ref ? edgePoint(n, ref) : raw[i];
+  });
+}
+
 /* ============================================================
    RENDER
    ============================================================ */
@@ -151,7 +184,7 @@ function drawScene(c, T, opts = {}) {
 
 function drawPipe(c, p, S, OX, OY) {
   const cfg = PIPES[p.type] || PIPES.coldMains;
-  const pts = p.pts.map(ptPos);
+  const pts = resolvePipePts(p.pts);
   if (pts.length < 2) return;
   c.beginPath();
   c.moveTo(pts[0].x * S + OX, pts[0].y * S + OY);
@@ -311,7 +344,8 @@ function drawSelection() {
     ctx.strokeRect(x - 3, y - 3, w + 6, h + 6); ctx.setLineDash([]);
   } else if (sel.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === sel.id); if (!p) return;
-    for (const pt of p.pts) { const q = ptPos(pt); handle(sx(q.x), sy(q.y), pt.node ? '#16a34a' : '#0aa6c4'); }
+    const rp = resolvePipePts(p.pts);
+    p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4'));
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id); if (!z) return;
     const x = sx(z.x), y = sy(z.y), w = z.w * view.scale, h = z.h * view.scale;
@@ -333,8 +367,9 @@ function zoneHandles(z) {
 }
 
 function drawDraft() {
-  const pts = draft.pts.map(p => ptPos(p));
-  if (draft.preview) pts.push(draft.preview);
+  const descr = draft.pts.slice();
+  if (draft.preview) descr.push(draft.preview);
+  const pts = resolvePipePts(descr);
   if (pts.length < 1) return;
   const cfg = PIPES[draft.type];
   ctx.strokeStyle = cfg.color; ctx.lineWidth = cfg.width; ctx.globalAlpha = .8;
@@ -342,7 +377,8 @@ function drawDraft() {
   ctx.beginPath(); ctx.moveTo(sx(pts[0].x), sy(pts[0].y));
   for (let i = 1; i < pts.length; i++) ctx.lineTo(sx(pts[i].x), sy(pts[i].y));
   ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-  for (const p of draft.pts) { const q = ptPos(p); handle(sx(q.x), sy(q.y), '#0aa6c4'); }
+  const rp = resolvePipePts(draft.pts);
+  for (let i = 0; i < draft.pts.length; i++) handle(sx(rp[i].x), sy(rp[i].y), '#0aa6c4');
 }
 
 /* ============================================================
@@ -358,7 +394,7 @@ function hitNode(wpt) {
 function hitPipe(wpt) {
   const tol = 7 / view.scale;
   for (let i = state.pipes.length - 1; i >= 0; i--) {
-    const pts = state.pipes[i].pts.map(ptPos);
+    const pts = resolvePipePts(state.pipes[i].pts);
     for (let j = 0; j < pts.length - 1; j++)
       if (distToSeg(wpt, pts[j], pts[j + 1]) < tol) return state.pipes[i];
   }
@@ -366,7 +402,8 @@ function hitPipe(wpt) {
 }
 function hitPipeVertex(p, wpt) {
   const tol = 8 / view.scale;
-  for (let i = 0; i < p.pts.length; i++) { const q = ptPos(p.pts[i]); if (Math.hypot(q.x - wpt.x, q.y - wpt.y) < tol) return i; }
+  const rp = resolvePipePts(p.pts);
+  for (let i = 0; i < rp.length; i++) { const q = rp[i]; if (Math.hypot(q.x - wpt.x, q.y - wpt.y) < tol) return i; }
   return -1;
 }
 function hitText(wpt) {
@@ -507,7 +544,7 @@ function onMove(e) {
   if (tool === 'pipe' && draft) {
     let prev = draft.pts.length ? ptPos(draft.pts[draft.pts.length - 1]) : null;
     let pv = { x: snap(w.x), y: snap(w.y) };
-    const near = nodeNear(w); if (near) pv = { x: near.x, y: near.y };
+    const near = nodeNear(w); if (near) pv = prev ? edgePoint(near, prev) : { x: near.x, y: near.y };
     else if (prev && ortho) pv = orthoConstrain(prev, pv);
     draft.preview = pv; draw(); return;
   }
