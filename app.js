@@ -112,6 +112,71 @@ function resolvePipePts(pts) {
   });
 }
 
+/* ---------- Text label layout (multi-line + word-wrap) ----------
+   Labels may contain explicit line breaks (\n) and/or an optional
+   `wrap` width (world units) that word-wraps long room names. A `align`
+   of 'center' centres each wrapped line under the widest one; the label
+   anchor (t.x, t.y) stays the top-left / first-line baseline so existing
+   single-line labels render exactly where they always did. */
+const LABEL_FONT_STACK = 'Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+const labelFont = px => `${px}px ${LABEL_FONT_STACK}`;
+const _measCtx = document.createElement('canvas').getContext('2d');
+
+function wrapWords(line, font, maxW) {
+  _measCtx.font = font;
+  if (_measCtx.measureText(line).width <= maxW) return [line];
+  const out = []; let cur = '';
+  for (let word of line.split(' ')) {
+    // hard-break a single word that can't fit on a line on its own
+    while (_measCtx.measureText(word).width > maxW && word.length > 1) {
+      let i = 1;
+      while (i < word.length && _measCtx.measureText(word.slice(0, i + 1)).width <= maxW) i++;
+      if (cur) { out.push(cur); cur = ''; }
+      out.push(word.slice(0, i)); word = word.slice(i);
+    }
+    const test = cur ? cur + ' ' + word : word;
+    if (cur && _measCtx.measureText(test).width > maxW) { out.push(cur); cur = word; }
+    else cur = test;
+  }
+  if (cur) out.push(cur);
+  return out.length ? out : [''];
+}
+function textLines(t) {
+  const raw = String(t.text == null ? '' : t.text).split(/\r?\n/);
+  const wrap = +t.wrap || 0;
+  if (!wrap) return raw.length ? raw : [''];
+  const font = labelFont(t.size || 14);
+  const out = [];
+  for (const ln of raw) out.push(...wrapWords(ln, font, wrap));
+  return out.length ? out : [''];
+}
+/* World-unit metrics for hit-testing and export/fit bounds. */
+function textBlock(t) {
+  const size = t.size || 14;
+  const lines = textLines(t);
+  _measCtx.font = labelFont(size);
+  let maxW = 0;
+  for (const ln of lines) maxW = Math.max(maxW, _measCtx.measureText(ln).width);
+  const lineH = size * 1.3;
+  return { lines, size, lineH, w: maxW, h: (lines.length - 1) * lineH + size, ascent: size * 0.82 };
+}
+function drawText(c, t, S, X, Y) {
+  const size = t.size || 14;
+  const fs = size * Math.min(S, 1.6);   // same readability cap used by other labels
+  const lh = fs * 1.3;
+  const lines = textLines(t);
+  c.font = labelFont(fs);
+  c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  c.fillStyle = t.color || '#1f2c3a';
+  const bx = X(t.x), by = Y(t.y);
+  if (t.align === 'center') {
+    let maxW = 0; const widths = lines.map(ln => { const w = c.measureText(ln).width; if (w > maxW) maxW = w; return w; });
+    for (let i = 0; i < lines.length; i++) c.fillText(lines[i], bx + (maxW - widths[i]) / 2, by + i * lh);
+  } else {
+    for (let i = 0; i < lines.length; i++) c.fillText(lines[i], bx, by + i * lh);
+  }
+}
+
 /* ============================================================
    RENDER
    ============================================================ */
@@ -172,13 +237,8 @@ function drawScene(c, T, opts = {}) {
   for (const p of state.pipes) drawPipe(c, p, S, OX, OY);
   // nodes
   for (const n of state.nodes) drawNode(c, n, S, OX, OY);
-  // texts
-  c.textAlign = 'left'; c.textBaseline = 'alphabetic';
-  for (const t of state.texts) {
-    c.fillStyle = '#1f2c3a';
-    c.font = `${(t.size || 14) * Math.min(S, 1.6)}px var(--sans,system-ui)`;
-    c.fillText(t.text || '', X(t.x), Y(t.y));
-  }
+  // texts (multi-line + optional word-wrap)
+  for (const t of state.texts) drawText(c, t, S, X, Y);
   if (opts.legend) drawLegend(c, opts.legendXY[0], opts.legendXY[1]);
 }
 
@@ -408,8 +468,9 @@ function hitPipeVertex(p, wpt) {
 }
 function hitText(wpt) {
   for (let i = state.texts.length - 1; i >= 0; i--) {
-    const t = state.texts[i], w = (t.text || '').length * (t.size || 14) * .55, h = (t.size || 14);
-    if (wpt.x >= t.x - 4 && wpt.x <= t.x + w && wpt.y >= t.y - h && wpt.y <= t.y + 4) return t;
+    const t = state.texts[i], m = textBlock(t);
+    const top = t.y - m.ascent;
+    if (wpt.x >= t.x - 4 && wpt.x <= t.x + m.w + 4 && wpt.y >= top - 4 && wpt.y <= top + m.h + 4) return t;
   }
   return null;
 }
@@ -689,7 +750,9 @@ function renderInspector() {
   } else if (sel.kind === 'text') {
     const t = state.texts.find(t => t.id === sel.id); if (!t) return select(null);
     h += `<div class="insp-head"><span class="badge">TEXT</span><h3>Label</h3></div>`;
-    h += row('Text', `<input class="i-text" value="${esc(t.text)}">`);
+    h += row('Text', `<textarea class="i-text" rows="3" placeholder="Room name — press Enter for a new line">${esc(t.text)}</textarea>`);
+    h += row('Alignment', `<select class="i-talign"><option value="left" ${t.align !== 'center' ? 'selected' : ''}>Left</option><option value="center" ${t.align === 'center' ? 'selected' : ''}>Centre</option></select>`);
+    h += row('Wrap width (0 = off)', `<input class="i-twrap" type="number" min="0" step="10" value="${t.wrap || 0}" placeholder="e.g. 140">`);
     h += row('Size', `<input class="i-tsize" type="number" value="${t.size || 14}" min="8" max="48">`);
     h += `<button class="btn-del" data-del>Delete label</button>`;
   }
@@ -723,6 +786,8 @@ function wireInspector() {
   } else if (sel.kind === 'text') {
     const t = state.texts.find(t => t.id === sel.id);
     set('.i-text', 'input', e => { t.text = e.target.value; dirty = true; draw(); });
+    set('.i-talign', 'change', e => { t.align = e.target.value; commit(); });
+    set('.i-twrap', 'input', e => { t.wrap = Math.max(0, +e.target.value || 0); dirty = true; draw(); });
     set('.i-tsize', 'input', e => { t.size = +e.target.value || 14; dirty = true; draw(); });
   }
   const del = $('[data-del]', body); if (del) del.addEventListener('click', deleteSelected);
@@ -778,7 +843,7 @@ function contentBounds(pad = 60) {
   for (const n of state.nodes) { xs.push(n.x - n.w / 2, n.x + n.w / 2); ys.push(n.y - n.h / 2, n.y + n.h / 2); }
   for (const z of state.zones) { xs.push(z.x, z.x + z.w); ys.push(z.y, z.y + z.h); }
   for (const p of state.pipes) for (const pt of p.pts) { const q = ptPos(pt); xs.push(q.x); ys.push(q.y); }
-  for (const t of state.texts) { xs.push(t.x, t.x + 80); ys.push(t.y - 14, t.y); }
+  for (const t of state.texts) { const m = textBlock(t); xs.push(t.x, t.x + m.w); ys.push(t.y - m.ascent, t.y - m.ascent + m.h); }
   if (!xs.length) return null;
   return { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad, w: Math.max(...xs) - Math.min(...xs) + pad * 2, h: Math.max(...ys) - Math.min(...ys) + pad * 2 };
 }
@@ -1069,6 +1134,62 @@ function placeDetected() {
 }
 
 /* ============================================================
+   BULK LABELS  — paste a list of room names, one per line
+   ============================================================ */
+function bulkNames() {
+  return $('#bulkText').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+}
+function updateBulkSummary() {
+  const n = bulkNames().length;
+  $('#bulkSummary').textContent = n ? `${n} label${n > 1 ? 's' : ''} ready` : '';
+  $('#bulkPlace').disabled = !n;
+}
+function openBulkModal() { closeMenu(); $('#bulkModal').hidden = false; updateBulkSummary(); $('#bulkText').focus(); }
+function closeBulkModal() { $('#bulkModal').hidden = true; }
+
+function placeBulkLabels() {
+  const names = bulkNames();
+  if (!names.length) { toast('Paste at least one room name first'); return; }
+  const size = Math.min(48, Math.max(8, +$('#bulkSize').value || 14));
+  const wrap = Math.max(0, +$('#bulkWrap').value || 0);
+  const cols = Math.min(12, Math.max(1, +$('#bulkCols').value || 3));
+  const center = $('#bulkCenter').checked;
+  const align = center ? 'center' : 'left';
+
+  // Column width from the wrap setting (or a sensible default); row height from
+  // the tallest label once wrapped, so nothing overlaps in the grid.
+  const colW = (wrap || 160) + 40;
+  let maxLines = 1;
+  for (const name of names) maxLines = Math.max(maxLines, textLines({ text: name, size, wrap, align }).length);
+  const rowH = maxLines * size * 1.3 + 34;
+
+  const usedCols = Math.min(cols, names.length);
+  const rows = Math.ceil(names.length / cols);
+  const cssW = canvas.width / dpr, cssH = canvas.height / dpr;
+  // Centre the whole block on the current view.
+  const ox = snap(wx(cssW / 2) - (usedCols * colW) / 2);
+  const oy = snap(wy(cssH / 2) - (rows * rowH) / 2);
+
+  mutate(() => {
+    names.forEach((name, i) => {
+      const r = Math.floor(i / cols), c = i % cols;
+      const x = snap(ox + c * colW);
+      const y = snap(oy + r * rowH) + size;   // +size so the first-line baseline sits below the cell top
+      state.texts.push({ id: uid(), x, y, text: name, size, wrap: wrap || 0, align });
+    });
+    select(null);
+  });
+  closeBulkModal();
+  toast(`${names.length} label${names.length > 1 ? 's' : ''} added — drag to position`);
+}
+
+$('#btnBulkLabels').onclick = openBulkModal;
+$('#bulkClose').onclick = $('#bulkCancel').onclick = closeBulkModal;
+$('#bulkText').addEventListener('input', updateBulkSummary);
+$('#bulkPlace').onclick = placeBulkLabels;
+$('#bulkModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeBulkModal(); });
+
+/* ============================================================
    MENU SHEET
    ============================================================ */
 function closeMenu() { $('#menuSheet').hidden = true; }
@@ -1097,6 +1218,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Enter' && draft) finishPipe();
   if (e.key === 'Escape') {
     if (!$('#menuSheet').hidden) { closeMenu(); return; }
+    if (!$('#bulkModal').hidden) { closeBulkModal(); return; }
     if (!$('#importModal').hidden) { closeImportModal(); return; }
     if (draft) cancelDraft(); else select(null);
   }

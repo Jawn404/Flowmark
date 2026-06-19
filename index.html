@@ -48,6 +48,7 @@
           <button class="tool" data-tool="zone" title="Draw a floor / area zone (Z)"><span class="ico">▢</span><span class="lbl">Area</span></button>
           <button class="tool" data-tool="text" title="Add a text label (T)"><span class="ico">T</span><span class="lbl">Label</span></button>
         </div>
+        <button class="pal-btn" id="btnBulkLabels" title="Paste a list of room names to create many labels at once">＋ Bulk labels</button>
       </div>
 
       <div class="pal-group">
@@ -130,6 +131,33 @@
       <span class="grow"></span>
       <button class="tb" id="importCancel">Cancel</button>
       <button class="tb primary" id="importPlace">Place on canvas</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ===== Bulk labels modal ===== -->
+<div class="modal-backdrop" id="bulkModal" hidden>
+  <div class="modal">
+    <header><h2>Labels from a list</h2><button class="x" id="bulkClose">✕</button></header>
+    <div class="modal-body">
+      <div class="import-note">Paste room names — one per line. A label is created for each and laid out in a grid on the canvas, ready for you to drag into place. Long names wrap onto multiple lines.</div>
+      <textarea id="bulkText" placeholder="Reception
+Ground Floor WC
+Disabled Accessible Bathroom (East Wing)
+Kitchen / Servery
+Plant Room"></textarea>
+      <div class="bulk-opts">
+        <label>Text size <input id="bulkSize" type="number" value="14" min="8" max="48"></label>
+        <label>Wrap width <input id="bulkWrap" type="number" value="140" min="0" step="10"></label>
+        <label>Columns <input id="bulkCols" type="number" value="3" min="1" max="12"></label>
+        <label class="chk"><input id="bulkCenter" type="checkbox" checked> Centre text</label>
+      </div>
+    </div>
+    <footer>
+      <span class="muted" id="bulkSummary"></span>
+      <span class="grow"></span>
+      <button class="tb" id="bulkCancel">Cancel</button>
+      <button class="tb primary" id="bulkPlace">Create labels</button>
     </footer>
   </div>
 </div>
