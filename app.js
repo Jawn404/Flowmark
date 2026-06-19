@@ -21,7 +21,7 @@ const ASSETS = {
   cap:    { w: 22, h: 22, name: 'Capped / blanked end', tag: '', fields: [] },
 };
 const PIPES = {
-  coldMains: { color: '#2563eb', width: 2,   dash: [],     name: 'Cold — mains' },
+  coldMains: { color: '#16a34a', width: 2,   dash: [],     name: 'Cold — mains' },
   coldTank:  { color: '#2563eb', width: 2,   dash: [7, 5], name: 'Cold — tank' },
   hotFlow:   { color: '#dc2626', width: 2,   dash: [],     name: 'Hot — flow' },
   hotReturn: { color: '#dc2626', width: 2,   dash: [7, 5], name: 'Hot — return' },

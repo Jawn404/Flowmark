@@ -78,7 +78,7 @@ button{font-family:inherit;cursor:pointer}
 /* line swatches in palette */
 .ico.line{width:30px;height:0;border:none;position:relative}
 .ico.line::after{content:"";position:absolute;left:0;right:0;top:50%}
-.cold-mains::after{border-top:2.5px solid var(--cold)}
+.cold-mains::after{border-top:2.5px solid #16a34a}
 .cold-tank::after{border-top:2.5px dotted var(--cold)}
 .hot-flow::after{border-top:2.5px solid var(--hot)}
 .hot-return::after{border-top:2.5px dashed var(--hot)}
