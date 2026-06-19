@@ -39,7 +39,8 @@ let view = { scale: 1, ox: 0, oy: 0 };
 let tool = 'select';
 let pipeKind = 'coldMains';
 let assetKind = 'tank';
-let sel = null;               // {kind:'node'|'pipe'|'zone'|'text', id}
+let sel = null;               // {kind:'node'|'pipe'|'zone'|'text', id}  — single selection (drives inspector)
+let group = [];               // multi-selection: array of {kind,id}. When >1, sel is null.
 let draft = null;             // pipe being drawn
 let ortho = true;             // right-angle pipe mode
 let showGrid = true, snapOn = true, showLegend = true;
@@ -188,7 +189,20 @@ function draw() {
   const cssW = W / dpr, cssH = H / dpr;
   drawScene(ctx, view, { legend: showLegend, legendXY: [14, cssH - 14] });
   if (sel) drawSelection();
+  if (group.length) drawSelection();
+  if (drag && drag.mode === 'marquee') drawMarquee();
   if (draft) drawDraft();
+}
+
+function drawMarquee() {
+  const a = drag.start, b = drag.cur;
+  const x = sx(Math.min(a.x, b.x)), y = sy(Math.min(a.y, b.y));
+  const w = Math.abs(b.x - a.x) * view.scale, h = Math.abs(b.y - a.y) * view.scale;
+  ctx.save();
+  ctx.fillStyle = 'rgba(10,166,196,.10)';
+  ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
+  ctx.fillRect(x, y, w, h); ctx.strokeRect(x + .5, y + .5, w, h);
+  ctx.restore();
 }
 
 function drawGrid() {
@@ -397,25 +411,45 @@ function roundRect(c, x, y, w, h, r) {
 /* selection overlay (screen only) */
 function drawSelection() {
   ctx.save();
-  if (sel.kind === 'node') {
-    const n = nodeById(sel.id); if (!n) return;
+  if (group.length) { for (const ref of group) outlineRef(ref, true); }
+  else if (sel) outlineRef(sel, false);
+  ctx.restore();
+}
+function outlineRef(ref, multi) {
+  if (ref.kind === 'node') {
+    const n = nodeById(ref.id); if (!n) return;
     const x = sx(n.x - n.w / 2), y = sy(n.y - n.h / 2), w = n.w * view.scale, h = n.h * view.scale;
     ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
     ctx.strokeRect(x - 3, y - 3, w + 6, h + 6); ctx.setLineDash([]);
-  } else if (sel.kind === 'pipe') {
-    const p = state.pipes.find(p => p.id === sel.id); if (!p) return;
+  } else if (ref.kind === 'pipe') {
+    const p = state.pipes.find(p => p.id === ref.id); if (!p) return;
     const rp = resolvePipePts(p.pts);
-    p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4'));
-  } else if (sel.kind === 'zone') {
-    const z = state.zones.find(z => z.id === sel.id); if (!z) return;
+    if (multi) {
+      // group mode: highlight the whole run rather than per-vertex handles
+      ctx.strokeStyle = '#0aa6c4'; ctx.globalAlpha = .3;
+      ctx.lineWidth = (PIPES[p.type].width) * Math.max(.8, Math.min(view.scale, 1.6)) + 5;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(sx(rp[0].x), sy(rp[0].y));
+      for (let i = 1; i < rp.length; i++) ctx.lineTo(sx(rp[i].x), sy(rp[i].y));
+      ctx.stroke(); ctx.globalAlpha = 1;
+    } else {
+      p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4'));
+    }
+  } else if (ref.kind === 'zone') {
+    const z = state.zones.find(z => z.id === ref.id); if (!z) return;
     const x = sx(z.x), y = sy(z.y), w = z.w * view.scale, h = z.h * view.scale;
-    ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, w, h);
-    for (const [hx, hy] of zoneHandles(z)) handle(sx(hx), sy(hy), '#0aa6c4');
-  } else if (sel.kind === 'text') {
-    const t = state.texts.find(t => t.id === sel.id); if (!t) return;
-    handle(sx(t.x), sy(t.y), '#0aa6c4');
+    ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1.5;
+    if (multi) { ctx.setLineDash([4, 3]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]); }
+    else { ctx.strokeRect(x, y, w, h); for (const [hx, hy] of zoneHandles(z)) handle(sx(hx), sy(hy), '#0aa6c4'); }
+  } else if (ref.kind === 'text') {
+    const t = state.texts.find(t => t.id === ref.id); if (!t) return;
+    if (multi) {
+      const m = textBlock(t);
+      const x = sx(t.x), y = sy(t.y - m.ascent), w = m.w * view.scale, h = m.h * view.scale;
+      ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x - 3, y - 3, w + 6, h + 6); ctx.setLineDash([]);
+    } else handle(sx(t.x), sy(t.y), '#0aa6c4');
   }
-  ctx.restore();
 }
 function handle(x, y, col) {
   ctx.fillStyle = '#fff'; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
@@ -502,6 +536,87 @@ function nodeNear(wpt, maxScreen = 20) {
   return best;
 }
 
+/* ---------- marquee + group selection ---------- */
+const rectFromPts = (a, b) => ({ x1: Math.min(a.x, b.x), y1: Math.min(a.y, b.y), x2: Math.max(a.x, b.x), y2: Math.max(a.y, b.y) });
+const rectsOverlap = (a, b) => a.x1 <= b.x2 && a.x2 >= b.x1 && a.y1 <= b.y2 && a.y2 >= b.y1;
+const ptInRect = (r, p) => p.x >= r.x1 && p.x <= r.x2 && p.y >= r.y1 && p.y <= r.y2;
+function segSeg(p1, p2, p3, p4) {
+  const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
+  if (!d) return false;
+  const t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
+  const u = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+function segHitsRect(r, a, b) {
+  if (ptInRect(r, a) || ptInRect(r, b)) return true;
+  const c1 = { x: r.x1, y: r.y1 }, c2 = { x: r.x2, y: r.y1 }, c3 = { x: r.x2, y: r.y2 }, c4 = { x: r.x1, y: r.y2 };
+  return segSeg(a, b, c1, c2) || segSeg(a, b, c2, c3) || segSeg(a, b, c3, c4) || segSeg(a, b, c4, c1);
+}
+/* Assets/pipes/labels use "crossing" selection (touch to grab); zones, being big
+   backgrounds, are only grabbed when fully enclosed, so a marquee drawn inside a
+   floor doesn't sweep up the floor itself. */
+function collectInMarquee(r) {
+  const g = [];
+  for (const n of state.nodes) {
+    const nb = { x1: n.x - n.w / 2, y1: n.y - n.h / 2, x2: n.x + n.w / 2, y2: n.y + n.h / 2 };
+    if (rectsOverlap(r, nb)) g.push({ kind: 'node', id: n.id });
+  }
+  for (const p of state.pipes) {
+    const pts = resolvePipePts(p.pts); let hit = false;
+    if (pts.length === 1) hit = ptInRect(r, pts[0]);
+    for (let i = 0; i < pts.length - 1 && !hit; i++) if (segHitsRect(r, pts[i], pts[i + 1])) hit = true;
+    if (hit) g.push({ kind: 'pipe', id: p.id });
+  }
+  for (const t of state.texts) {
+    const m = textBlock(t);
+    const tb = { x1: t.x, y1: t.y - m.ascent, x2: t.x + m.w, y2: t.y - m.ascent + m.h };
+    if (rectsOverlap(r, tb)) g.push({ kind: 'text', id: t.id });
+  }
+  for (const z of state.zones) {
+    if (r.x1 <= z.x && r.x2 >= z.x + z.w && r.y1 <= z.y && r.y2 >= z.y + z.h) g.push({ kind: 'zone', id: z.id });
+  }
+  return g;
+}
+function hitAny(w) {
+  const n = hitNode(w); if (n) return { kind: 'node', id: n.id };
+  const p = hitPipe(w); if (p) return { kind: 'pipe', id: p.id };
+  const t = hitText(w); if (t) return { kind: 'text', id: t.id };
+  const z = hitZoneLabel(w); if (z) return { kind: 'zone', id: z.id };
+  return null;
+}
+const inGroup = ref => group.some(r => r.kind === ref.kind && r.id === ref.id);
+
+function setGroup(g) {
+  group = g; sel = null; renderInspector(); draw();
+  if (window.innerWidth <= 880) $('#inspector').classList.add('open');
+}
+function toggleGroup(ref) {
+  if (!group.length && sel) group = [{ ...sel }];   // seed from current single selection
+  const i = group.findIndex(r => r.kind === ref.kind && r.id === ref.id);
+  if (i >= 0) group.splice(i, 1); else group.push(ref);
+  if (group.length === 1) select(group[0]);          // collapse to a normal single selection
+  else if (group.length === 0) select(null);
+  else { sel = null; renderInspector(); draw(); }
+}
+function finishMarquee() {
+  const r = rectFromPts(drag.start, drag.cur);
+  const tiny = Math.abs(drag.cur.x - drag.start.x) * view.scale < 4 && Math.abs(drag.cur.y - drag.start.y) * view.scale < 4;
+  if (tiny) { select(null); return; }
+  const g = collectInMarquee(r);
+  if (g.length === 0) select(null);
+  else if (g.length === 1) select(g[0]);             // one item → behave like a normal click-select
+  else setGroup(g);
+}
+function startGroupDrag(w) {
+  const items = group.map(ref => {
+    if (ref.kind === 'node') { const n = nodeById(ref.id); return n && { kind: 'node', id: ref.id, x: n.x, y: n.y }; }
+    if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); return t && { kind: 'text', id: ref.id, x: t.x, y: t.y }; }
+    if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); return z && { kind: 'zone', id: ref.id, x: z.x, y: z.y }; }
+    if (ref.kind === 'pipe') { const p = state.pipes.find(p => p.id === ref.id); return p && { kind: 'pipe', id: ref.id, pts: p.pts.map(pt => ({ x: pt.x, y: pt.y })) }; }
+  }).filter(Boolean);
+  return { mode: 'group', origin: w, items };
+}
+
 /* ============================================================
    POINTER / TOOLS
    ============================================================ */
@@ -576,6 +691,16 @@ function onDown(e) {
   }
 
   /* --- select tool --- */
+  // shift-click toggles an item in/out of the multi-selection
+  if (e.shiftKey) {
+    const ref = hitAny(w);
+    if (ref) { toggleGroup(ref); drag = null; return; }
+  }
+  // press on any member of the current group → move the whole group
+  if (group.length) {
+    const ref = hitAny(w);
+    if (ref && inGroup(ref)) { snapshot(); drag = startGroupDrag(w); return; }
+  }
   // vertex of selected pipe?
   if (sel && sel.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === sel.id);
@@ -594,8 +719,10 @@ function onDown(e) {
   if (t) { select({ kind: 'text', id: t.id }); snapshot(); drag = { mode: 'text', text: t, dx: w.x - t.x, dy: w.y - t.y }; return; }
   const z = hitZoneLabel(w);
   if (z) { select({ kind: 'zone', id: z.id }); snapshot(); drag = { mode: 'zone', zone: z, last: w }; return; }
+  // empty space: start a marquee (drag-box) selection. Pan is still available via
+  // space-drag, middle mouse, the Pan tool (H), the wheel/trackpad, or two fingers.
   select(null);
-  drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, ox: view.ox, oy: view.oy };
+  drag = { mode: 'marquee', start: w, cur: w };
 }
 
 function onMove(e) {
@@ -612,6 +739,21 @@ function onMove(e) {
   if (!drag) return;
 
   if (drag.mode === 'pan') { view.ox = drag.ox + (e.clientX - drag.sx); view.oy = drag.oy + (e.clientY - drag.sy); draw(); return; }
+  if (drag.mode === 'marquee') { drag.cur = w; draw(); return; }
+  if (drag.mode === 'group') {
+    let dx = w.x - drag.origin.x, dy = w.y - drag.origin.y;
+    if (snapOn) { dx = Math.round(dx / GRID) * GRID; dy = Math.round(dy / GRID) * GRID; }
+    for (const it of drag.items) {
+      if (it.kind === 'node') { const n = nodeById(it.id); if (n) { n.x = it.x + dx; n.y = it.y + dy; } }
+      else if (it.kind === 'text') { const t = state.texts.find(t => t.id === it.id); if (t) { t.x = it.x + dx; t.y = it.y + dy; } }
+      else if (it.kind === 'zone') { const z = state.zones.find(z => z.id === it.id); if (z) { z.x = it.x + dx; z.y = it.y + dy; } }
+      else if (it.kind === 'pipe') {
+        const p = state.pipes.find(p => p.id === it.id);
+        if (p) it.pts.forEach((o, k) => { const pt = p.pts[k]; if (pt && !pt.node) { pt.x = o.x + dx; pt.y = o.y + dy; } });
+      }
+    }
+    dirty = true; draw(); return;
+  }
   if (drag.mode === 'node') { drag.node.x = snap(w.x - drag.dx); drag.node.y = snap(w.y - drag.dy); dirty = true; draw(); return; }
   if (drag.mode === 'text') { drag.text.x = snap(w.x - drag.dx); drag.text.y = snap(w.y - drag.dy); dirty = true; draw(); return; }
   if (drag.mode === 'vertex') {
@@ -641,6 +783,8 @@ function onMove(e) {
 }
 
 function onUp() {
+  if (drag && drag.mode === 'marquee') { finishMarquee(); drag = null; return; }
+  if (drag && drag.mode === 'group') { commit(); drag = null; return; }
   if (drag && drag.mode === 'zoneNew' && drag.id) {
     const z = state.zones.find(z => z.id === drag.id);
     if (z) { select({ kind: 'zone', id: z.id }); }
@@ -715,10 +859,21 @@ function autoLabel(type) {
 /* ============================================================
    SELECTION + INSPECTOR
    ============================================================ */
-function select(s) { sel = s; renderInspector(); draw(); if (s && window.innerWidth <= 880) $('#inspector').classList.add('open'); }
+function select(s) { group = []; sel = s; renderInspector(); draw(); if (s && window.innerWidth <= 880) $('#inspector').classList.add('open'); }
 
 function renderInspector() {
   const body = $('#inspBody'), empty = $('#inspEmpty');
+  if (group.length > 1) {
+    empty.hidden = true; body.hidden = false;
+    const counts = group.reduce((m, r) => { m[r.kind] = (m[r.kind] || 0) + 1; return m; }, {});
+    const noun = { node: 'asset', pipe: 'pipe', zone: 'area', text: 'label' };
+    const parts = Object.entries(counts).map(([k, n]) => `${n} ${noun[k]}${n > 1 ? 's' : ''}`).join(' · ');
+    body.innerHTML = `<div class="insp-head"><span class="badge">×${group.length}</span><h3>Multiple items</h3></div>`
+      + `<p class="muted" style="font-size:12px;margin:4px 0 10px">${parts}.<br>Drag any selected item to move them together. Shift-click to add or remove. Delete removes all.</p>`
+      + `<button class="btn-del" data-delgroup>Delete ${group.length} items</button>`;
+    const d = $('[data-delgroup]', body); if (d) d.addEventListener('click', deleteSelected);
+    return;
+  }
   if (!sel) { empty.hidden = false; body.hidden = true; return; }
   empty.hidden = true; body.hidden = false;
   let h = '';
@@ -794,6 +949,21 @@ function wireInspector() {
 }
 
 function deleteSelected() {
+  if (group.length) {
+    const nodeIds = new Set(), pipeIds = new Set(), zoneIds = new Set(), textIds = new Set();
+    for (const r of group) ({ node: nodeIds, pipe: pipeIds, zone: zoneIds, text: textIds }[r.kind]).add(r.id);
+    mutate(() => {
+      if (nodeIds.size) {
+        state.nodes = state.nodes.filter(n => !nodeIds.has(n.id));
+        for (const p of state.pipes) for (const pt of p.pts) if (pt.node && nodeIds.has(pt.node)) delete pt.node;
+      }
+      if (pipeIds.size) state.pipes = state.pipes.filter(p => !pipeIds.has(p.id));
+      if (zoneIds.size) state.zones = state.zones.filter(z => !zoneIds.has(z.id));
+      if (textIds.size) state.texts = state.texts.filter(t => !textIds.has(t.id));
+      select(null);
+    });
+    return;
+  }
   if (!sel) return;
   mutate(() => {
     if (sel.kind === 'node') {
@@ -1222,7 +1392,7 @@ window.addEventListener('keydown', e => {
     if (!$('#importModal').hidden) { closeImportModal(); return; }
     if (draft) cancelDraft(); else select(null);
   }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && sel) { e.preventDefault(); deleteSelected(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && (sel || group.length)) { e.preventDefault(); deleteSelected(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
   if (!e.ctrlKey && !e.metaKey) {
