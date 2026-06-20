@@ -200,7 +200,7 @@ function draw() {
   drawDesk(cssW, cssH);          // neutral surface behind the sheet
   drawPage();                    // white A4 sheet (shadow + border)
   if (showGrid) drawGrid();      // grid is clipped to the sheet
-  drawScene(ctx, view, { legend: showLegend, legendXY: [14, cssH - 14] });
+  drawScene(ctx, view, { legend: showLegend, legendFrame: { x: 0, y: 0, w: cssW, h: cssH }, legendMargin: 14 });
   if (sel) drawSelection();
   if (group.length) drawSelection();
   if (drag && drag.mode === 'marquee') drawMarquee();
@@ -293,7 +293,11 @@ function drawScene(c, T, opts = {}) {
   for (const n of state.nodes) drawNode(c, n, S, OX, OY);
   // texts (multi-line + optional word-wrap)
   for (const t of state.texts) drawText(c, t, S, X, Y);
-  if (opts.legend) drawLegend(c, opts.legendXY[0], opts.legendXY[1]);
+  if (opts.legend) {
+    const frame = opts.legendFrame || { x: 0, y: 0, w: 0, h: 0 };
+    const [lx, ly] = placeLegend(c, T, frame, opts.legendMargin ?? 14, opts.legendExtra || []);
+    drawLegend(c, lx, ly);
+  }
 }
 
 function drawPipe(c, p, S, OX, OY) {
@@ -424,27 +428,83 @@ function drawNode(c, n, S, OX, OY) {
   }
 }
 
+const LEGEND_ITEMS = [
+  ['coldMains', 'Cold — mains'], ['coldTank', 'Cold — tank'],
+  ['hotFlow', 'Hot — flow'], ['hotReturn', 'Hot — return'], ['deadleg', 'Deadleg'],
+];
+const LEGEND_M = { rowH: 18, padX: 12, padY: 10, sample: 30, gap: 8, font: '11px var(--sans,system-ui)' };
+
+/* Legend box dimensions without drawing, so placement can reason about it. */
+function legendSize(c) {
+  const M = LEGEND_M;
+  c.font = M.font;
+  let maxW = 0; for (const [, t] of LEGEND_ITEMS) maxW = Math.max(maxW, c.measureText(t).width);
+  return { w: M.padX * 2 + M.sample + M.gap + maxW, h: M.padY * 2 + M.rowH * LEGEND_ITEMS.length };
+}
+
+/* (lx, ly) is the legend's bottom-left anchor (kept for backward compatibility). */
 function drawLegend(c, lx, ly) {
-  const items = [
-    ['coldMains', 'Cold — mains'], ['coldTank', 'Cold — tank'],
-    ['hotFlow', 'Hot — flow'], ['hotReturn', 'Hot — return'], ['deadleg', 'Deadleg'],
-  ];
-  const rowH = 18, padX = 12, padY = 10, sample = 30;
-  c.font = '11px var(--sans,system-ui)';
-  let maxW = 0; for (const [, t] of items) maxW = Math.max(maxW, c.measureText(t).width);
-  const boxW = padX * 2 + sample + 8 + maxW;
-  const boxH = padY * 2 + rowH * items.length;
+  const M = LEGEND_M;
+  const { w: boxW, h: boxH } = legendSize(c);
   const x = lx, y = ly - boxH;
   c.fillStyle = 'rgba(255,255,255,.94)'; c.strokeStyle = '#cbd5e1'; c.lineWidth = 1;
   roundRect(c, x, y, boxW, boxH, 8); c.fill(); c.stroke();
   c.textAlign = 'left'; c.textBaseline = 'middle';
-  items.forEach(([k, t], i) => {
-    const cy = y + padY + rowH * i + rowH / 2;
+  LEGEND_ITEMS.forEach(([k, t], i) => {
+    const cy = y + M.padY + M.rowH * i + M.rowH / 2;
     const cfg = PIPES[k];
     c.strokeStyle = cfg.color; c.lineWidth = cfg.width; c.setLineDash(cfg.dash);
-    c.beginPath(); c.moveTo(x + padX, cy); c.lineTo(x + padX + sample, cy); c.stroke(); c.setLineDash([]);
-    c.fillStyle = '#1f2c3a'; c.fillText(t, x + padX + sample + 8, cy + .5);
+    c.beginPath(); c.moveTo(x + M.padX, cy); c.lineTo(x + M.padX + M.sample, cy); c.stroke(); c.setLineDash([]);
+    c.fillStyle = '#1f2c3a'; c.fillText(t, x + M.padX + M.sample + M.gap, cy + .5);
   });
+}
+
+/* ---------- Legend auto-placement ----------
+   Keep the legend clear of the schematic. We measure the on-screen footprint of
+   every asset, pipe, zone and label, then try the four corners of the sheet (or
+   viewport) in priority order and use the first one the legend box does not touch.
+   If the drawing genuinely reaches every corner, we fall back to the corner with
+   the least overlap so the legend still lands in the calmest available spot. */
+function contentObstacles(T) {
+  const S = T.scale, OX = T.ox, OY = T.oy;
+  const X = wx => wx * S + OX, Y = wy => wy * S + OY;
+  const rects = [];
+  for (const n of state.nodes) rects.push({ x: X(n.x - n.w / 2), y: Y(n.y - n.h / 2), w: n.w * S, h: n.h * S });
+  for (const z of state.zones) rects.push({ x: X(z.x), y: Y(z.y), w: z.w * S, h: z.h * S });
+  for (const t of state.texts) { const m = textBlock(t); rects.push({ x: X(t.x), y: Y(t.y - m.ascent), w: m.w * S, h: m.h * S }); }
+  for (const p of state.pipes) {
+    const rp = resolvePipePts(p.pts);
+    const infl = (PIPES[p.type]?.width || 2) / 2 + 3;   // half the stroke + a little breathing room
+    for (let i = 1; i < rp.length; i++) {
+      const ax = X(rp[i - 1].x), ay = Y(rp[i - 1].y), bx = X(rp[i].x), by = Y(rp[i].y);
+      rects.push({ x: Math.min(ax, bx) - infl, y: Math.min(ay, by) - infl, w: Math.abs(bx - ax) + infl * 2, h: Math.abs(by - ay) + infl * 2 });
+    }
+  }
+  return rects;
+}
+function rectOverlapArea(a, b) {
+  const ox = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const oy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return ox * oy;
+}
+/* Returns the bottom-left anchor [lx, ly] for the clearest corner of `frame`. */
+function placeLegend(c, T, frame, margin, extra = []) {
+  const sz = legendSize(c), m = margin;
+  const corners = [
+    [frame.x + m, frame.y + frame.h - m],                                   // bottom-left (current default)
+    [frame.x + frame.w - m - sz.w, frame.y + frame.h - m],                  // bottom-right
+    [frame.x + m, frame.y + m + sz.h],                                      // top-left
+    [frame.x + frame.w - m - sz.w, frame.y + m + sz.h],                     // top-right
+  ];
+  const obstacles = contentObstacles(T).concat(extra);
+  let best = corners[0], bestScore = Infinity;
+  for (const [lx, ly] of corners) {
+    const box = { x: lx, y: ly - sz.h, w: sz.w, h: sz.h };
+    let score = 0; for (const o of obstacles) score += rectOverlapArea(box, o);
+    if (score === 0) return [lx, ly];
+    if (score < bestScore) { bestScore = score; best = [lx, ly]; }
+  }
+  return best;
 }
 
 function roundRect(c, x, y, w, h, r) {
@@ -1274,13 +1334,25 @@ function renderExportCanvas(ss = 2.5, compose = 1) {
   cx.setTransform(ss, 0, 0, ss, 0, 0);                 // uniform supersample for crisp output
   cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cw, ch);
   const T = { scale: compose, ox: -b.x * compose, oy: -b.y * compose };
+  // Footer caption text + its on-sheet footprint (in compose units) so legend
+  // placement treats the caption as an obstacle and never lands on top of it.
+  const footText = `${state.name}   ·   ${new Date().toLocaleDateString('en-GB')}`;
+  const footFs = 13 * (ss / 2.5);                       // device px
+  cx.font = `${footFs}px system-ui`;
+  const footW = cx.measureText(footText).width;         // device px (unaffected by transform)
+  const footRect = {
+    x: (c.width - 16 - footW) / ss, y: (c.height - 8 - footFs * 1.25) / ss,
+    w: (footW + 16) / ss, h: (footFs * 1.6) / ss,
+  };
   // scene (composed at 100% => WYSIWYG label sizing). Anything off the sheet is
   // naturally clipped by the canvas bounds, matching what the page boundary shows.
-  drawScene(cx, T, { legend: showLegend, legendXY: [16, ch - 16] });
+  // The legend auto-places to a clear corner of the sheet, avoiding both the
+  // schematic geometry and the footer caption below.
+  drawScene(cx, T, { legend: showLegend, legendFrame: { x: 0, y: 0, w: cw, h: ch }, legendMargin: 16, legendExtra: [footRect] });
   // footer caption — drawn in raw device px so it stays a small, fixed-size caption
   cx.setTransform(1, 0, 0, 1, 0, 0);
-  cx.fillStyle = '#475569'; cx.font = `${13 * (ss / 2.5)}px system-ui`; cx.textAlign = 'right'; cx.textBaseline = 'bottom';
-  cx.fillText(`${state.name}   ·   ${new Date().toLocaleDateString('en-GB')}`, c.width - 16, c.height - 8);
+  cx.fillStyle = '#475569'; cx.font = `${footFs}px system-ui`; cx.textAlign = 'right'; cx.textBaseline = 'bottom';
+  cx.fillText(footText, c.width - 16, c.height - 8);
   return { canvas: c, bounds: b };
 }
 
