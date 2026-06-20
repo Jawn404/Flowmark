@@ -531,13 +531,16 @@ function outlineRef(ref, multi) {
     const p = state.pipes.find(p => p.id === ref.id); if (!p) return;
     const rp = resolvePipePts(p.pts);
     if (multi) {
-      // group mode: highlight the whole run rather than per-vertex handles
-      ctx.strokeStyle = '#0aa6c4'; ctx.globalAlpha = .3;
+      // group mode: trace the run faintly for context, then mark only the
+      // vertices caught by the marquee — those are the points that will move.
+      const verts = ref.verts || rp.map((_, i) => i);
+      ctx.strokeStyle = '#0aa6c4'; ctx.globalAlpha = .18;
       ctx.lineWidth = (PIPES[p.type].width) * Math.max(.8, Math.min(view.scale, 1.6)) + 5;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(sx(rp[0].x), sy(rp[0].y));
       for (let i = 1; i < rp.length; i++) ctx.lineTo(sx(rp[i].x), sy(rp[i].y));
       ctx.stroke(); ctx.globalAlpha = 1;
+      for (const i of verts) if (rp[i]) handle(sx(rp[i].x), sy(rp[i].y), '#0aa6c4');
     } else {
       p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4'));
     }
@@ -668,10 +671,17 @@ function collectInMarquee(r) {
     if (rectsOverlap(r, nb)) g.push({ kind: 'node', id: n.id });
   }
   for (const p of state.pipes) {
-    const pts = resolvePipePts(p.pts); let hit = false;
-    if (pts.length === 1) hit = ptInRect(r, pts[0]);
-    for (let i = 0; i < pts.length - 1 && !hit; i++) if (segHitsRect(r, pts[i], pts[i + 1])) hit = true;
-    if (hit) g.push({ kind: 'pipe', id: p.id });
+    // Grab the individual movable vertices that fall inside the box, rather than
+    // the whole run. Asset-bound endpoints (green handles) are left out so they
+    // keep following their asset; points outside the box stay put and the run
+    // flexes between the moved and the anchored points.
+    const pts = resolvePipePts(p.pts);
+    const verts = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (p.pts[i].node) continue;          // endpoint pinned to an asset
+      if (ptInRect(r, pts[i])) verts.push(i);
+    }
+    if (verts.length) g.push({ kind: 'pipe', id: p.id, verts });
   }
   for (const t of state.texts) {
     const m = textBlock(t);
@@ -692,14 +702,23 @@ function hitAny(w) {
 }
 const inGroup = ref => group.some(r => r.kind === ref.kind && r.id === ref.id);
 
+// A bare pipe ref (a click / shift-click, which has no vertex list) selects all
+// of that pipe's movable vertices. Asset-bound endpoints are excluded.
+function withPipeVerts(ref) {
+  if (ref.kind !== 'pipe' || ref.verts) return ref;
+  const p = state.pipes.find(p => p.id === ref.id);
+  const verts = p ? p.pts.map((pt, i) => (pt.node ? -1 : i)).filter(i => i >= 0) : [];
+  return { kind: 'pipe', id: ref.id, verts };
+}
+
 function setGroup(g) {
   group = g; sel = null; renderInspector(); draw();
   if (window.innerWidth <= 880) $('#inspector').classList.add('open');
 }
 function toggleGroup(ref) {
-  if (!group.length && sel) group = [{ ...sel }];   // seed from current single selection
+  if (!group.length && sel) group = [withPipeVerts({ ...sel })];   // seed from current single selection
   const i = group.findIndex(r => r.kind === ref.kind && r.id === ref.id);
-  if (i >= 0) group.splice(i, 1); else group.push(ref);
+  if (i >= 0) group.splice(i, 1); else group.push(withPipeVerts(ref));
   if (group.length === 1) select(group[0]);          // collapse to a normal single selection
   else if (group.length === 0) select(null);
   else { sel = null; renderInspector(); draw(); }
@@ -709,16 +728,24 @@ function finishMarquee() {
   const tiny = Math.abs(drag.cur.x - drag.start.x) * view.scale < 4 && Math.abs(drag.cur.y - drag.start.y) * view.scale < 4;
   if (tiny) { select(null); return; }
   const g = collectInMarquee(r);
-  if (g.length === 0) select(null);
-  else if (g.length === 1) select(g[0]);             // one item → behave like a normal click-select
-  else setGroup(g);
+  if (g.length === 0) { select(null); return; }
+  // A single non-pipe item behaves like a normal click-select. A single pipe is
+  // kept as a vertex selection so only the boxed points move, not the whole run.
+  if (g.length === 1 && g[0].kind !== 'pipe') { select(g[0]); return; }
+  setGroup(g);
 }
 function startGroupDrag(w) {
   const items = group.map(ref => {
     if (ref.kind === 'node') { const n = nodeById(ref.id); return n && { kind: 'node', id: ref.id, x: n.x, y: n.y }; }
     if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); return t && { kind: 'text', id: ref.id, x: t.x, y: t.y }; }
     if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); return z && { kind: 'zone', id: ref.id, x: z.x, y: z.y }; }
-    if (ref.kind === 'pipe') { const p = state.pipes.find(p => p.id === ref.id); return p && { kind: 'pipe', id: ref.id, pts: p.pts.map(pt => ({ x: pt.x, y: pt.y })) }; }
+    if (ref.kind === 'pipe') {
+      const p = state.pipes.find(p => p.id === ref.id);
+      if (!p) return null;
+      // only the selected, non-asset-bound vertices travel with the group
+      const verts = (ref.verts || p.pts.map((_, i) => i)).filter(i => p.pts[i] && !p.pts[i].node);
+      return { kind: 'pipe', id: ref.id, verts, orig: verts.map(i => ({ x: p.pts[i].x, y: p.pts[i].y })) };
+    }
   }).filter(Boolean);
   return { mode: 'group', origin: w, items };
 }
@@ -859,7 +886,7 @@ function onMove(e) {
       else if (it.kind === 'zone') { const z = state.zones.find(z => z.id === it.id); if (z) { z.x = it.x + dx; z.y = it.y + dy; } }
       else if (it.kind === 'pipe') {
         const p = state.pipes.find(p => p.id === it.id);
-        if (p) it.pts.forEach((o, k) => { const pt = p.pts[k]; if (pt && !pt.node) { pt.x = o.x + dx; pt.y = o.y + dy; } });
+        if (p) it.verts.forEach((vi, k) => { const pt = p.pts[vi], o = it.orig[k]; if (pt && o && !pt.node) { pt.x = o.x + dx; pt.y = o.y + dy; } });
       }
     }
     dirty = true; draw(); return;
@@ -973,14 +1000,20 @@ function select(s) { group = []; sel = s; renderInspector(); draw(); if (s && wi
 
 function renderInspector() {
   const body = $('#inspBody'), empty = $('#inspEmpty');
-  if (group.length > 1) {
+  if (group.length >= 1) {
     empty.hidden = true; body.hidden = false;
-    const counts = group.reduce((m, r) => { m[r.kind] = (m[r.kind] || 0) + 1; return m; }, {});
-    const noun = { node: 'asset', pipe: 'pipe', zone: 'area', text: 'label' };
-    const parts = Object.entries(counts).map(([k, n]) => `${n} ${noun[k]}${n > 1 ? 's' : ''}`).join(' · ');
-    body.innerHTML = `<div class="insp-head"><span class="badge">×${group.length}</span><h3>Multiple items</h3></div>`
-      + `<p class="muted" style="font-size:12px;margin:4px 0 10px">${parts}.<br>Drag any selected item to move them together. Shift-click to add or remove. Delete removes all.</p>`
-      + `<button class="btn-del" data-delgroup>Delete ${group.length} items</button>`;
+    const counts = { node: 0, point: 0, zone: 0, text: 0 };
+    for (const r of group) {
+      if (r.kind === 'pipe') counts.point += (r.verts ? r.verts.length : 0);
+      else counts[r.kind]++;
+    }
+    const total = counts.node + counts.point + counts.zone + counts.text;
+    const noun = { node: 'asset', point: 'pipe point', zone: 'area', text: 'label' };
+    const parts = Object.entries(counts).filter(([, n]) => n > 0)
+      .map(([k, n]) => `${n} ${noun[k]}${n > 1 ? 's' : ''}`).join(' · ');
+    body.innerHTML = `<div class="insp-head"><span class="badge">×${total}</span><h3>${total > 1 ? 'Multiple items' : 'Selection'}</h3></div>`
+      + `<p class="muted" style="font-size:12px;margin:4px 0 10px">${parts}.<br>Drag any selected item to move them together — boxed pipe points move while the rest of each run stays put. Shift-click to add or remove. Delete removes the selected items and points.</p>`
+      + `<button class="btn-del" data-delgroup>Delete ${total} item${total > 1 ? 's' : ''}</button>`;
     const d = $('[data-delgroup]', body); if (d) d.addEventListener('click', deleteSelected);
     return;
   }
@@ -1070,14 +1103,31 @@ function wireInspector() {
 
 function deleteSelected() {
   if (group.length) {
-    const nodeIds = new Set(), pipeIds = new Set(), zoneIds = new Set(), textIds = new Set();
-    for (const r of group) ({ node: nodeIds, pipe: pipeIds, zone: zoneIds, text: textIds }[r.kind]).add(r.id);
+    const nodeIds = new Set(), zoneIds = new Set(), textIds = new Set();
+    const pipeVerts = new Map();   // pipe id → Set of vertex indices to remove
+    for (const r of group) {
+      if (r.kind === 'node') nodeIds.add(r.id);
+      else if (r.kind === 'zone') zoneIds.add(r.id);
+      else if (r.kind === 'text') textIds.add(r.id);
+      else if (r.kind === 'pipe') {
+        const set = pipeVerts.get(r.id) || new Set();
+        (r.verts || []).forEach(i => set.add(i));
+        pipeVerts.set(r.id, set);
+      }
+    }
     mutate(() => {
       if (nodeIds.size) {
         state.nodes = state.nodes.filter(n => !nodeIds.has(n.id));
         for (const p of state.pipes) for (const pt of p.pts) if (pt.node && nodeIds.has(pt.node)) delete pt.node;
       }
-      if (pipeIds.size) state.pipes = state.pipes.filter(p => !pipeIds.has(p.id));
+      if (pipeVerts.size) {
+        for (const [id, set] of pipeVerts) {
+          const p = state.pipes.find(p => p.id === id);
+          if (p) p.pts = p.pts.filter((_, i) => !set.has(i));
+        }
+        // a run left with fewer than two points is no longer a line — drop it
+        state.pipes = state.pipes.filter(p => p.pts.length >= 2);
+      }
       if (zoneIds.size) state.zones = state.zones.filter(z => !zoneIds.has(z.id));
       if (textIds.size) state.texts = state.texts.filter(t => !textIds.has(t.id));
       select(null);
