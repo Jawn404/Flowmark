@@ -1011,10 +1011,14 @@ function renderInspector() {
     const noun = { node: 'asset', point: 'pipe point', zone: 'area', text: 'label' };
     const parts = Object.entries(counts).filter(([, n]) => n > 0)
       .map(([k, n]) => `${n} ${noun[k]}${n > 1 ? 's' : ''}`).join(' · ');
+    const movable = alignableUnits().length;
     body.innerHTML = `<div class="insp-head"><span class="badge">×${total}</span><h3>${total > 1 ? 'Multiple items' : 'Selection'}</h3></div>`
       + `<p class="muted" style="font-size:12px;margin:4px 0 10px">${parts}.<br>Drag any selected item to move them together — boxed pipe points move while the rest of each run stays put. Shift-click to add or remove. Delete removes the selected items and points.</p>`
+      + (movable >= 2 ? alignSection(movable) : '')
       + `<button class="btn-del" data-delgroup>Delete ${total} item${total > 1 ? 's' : ''}</button>`;
     const d = $('[data-delgroup]', body); if (d) d.addEventListener('click', deleteSelected);
+    $$('[data-align]', body).forEach(b => b.addEventListener('click', () => alignSelection(b.dataset.align)));
+    $$('[data-dist]', body).forEach(b => b.addEventListener('click', () => distributeSelection(b.dataset.dist)));
     return;
   }
   if (!sel) { empty.hidden = false; body.hidden = true; return; }
@@ -1145,6 +1149,144 @@ function deleteSelected() {
     else if (sel.kind === 'text') state.texts = state.texts.filter(t => t.id !== sel.id);
     select(null);
   });
+}
+
+/* ============================================================
+   ALIGN & DISTRIBUTE (multi-selection)
+   Treat each selected item as one unit with a world-space bounding box, then
+   shift whole units so their edges or centres line up, or space them evenly.
+   Asset-bound pipe endpoints (green) never move — only free pipe points do, and
+   the boxed points of one run move together so the run keeps its shape.
+   Results are deliberately NOT grid-snapped: matching an edge or centre exactly
+   matters more than the grid, and even gaps are often fractional. Snapping would
+   pull items back out of line.
+   ============================================================ */
+
+const ALIGN_ICONS = {
+  left:    `<svg viewBox="0 0 24 24"><line x1="4" y1="4" x2="4" y2="20" stroke="currentColor" stroke-width="1.6" opacity=".55"/><rect x="6" y="7" width="13" height="3.4" rx="1" fill="currentColor"/><rect x="6" y="13.6" width="8" height="3.4" rx="1" fill="currentColor"/></svg>`,
+  hcenter: `<svg viewBox="0 0 24 24"><line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="1.6" opacity=".55"/><rect x="4.5" y="7" width="15" height="3.4" rx="1" fill="currentColor"/><rect x="7" y="13.6" width="10" height="3.4" rx="1" fill="currentColor"/></svg>`,
+  right:   `<svg viewBox="0 0 24 24"><line x1="20" y1="4" x2="20" y2="20" stroke="currentColor" stroke-width="1.6" opacity=".55"/><rect x="5" y="7" width="13" height="3.4" rx="1" fill="currentColor"/><rect x="10" y="13.6" width="8" height="3.4" rx="1" fill="currentColor"/></svg>`,
+  top:     `<svg viewBox="0 0 24 24"><line x1="4" y1="4" x2="20" y2="4" stroke="currentColor" stroke-width="1.6" opacity=".55"/><rect x="7" y="6" width="3.4" height="13" rx="1" fill="currentColor"/><rect x="13.6" y="6" width="3.4" height="8" rx="1" fill="currentColor"/></svg>`,
+  vcenter: `<svg viewBox="0 0 24 24"><line x1="3" y1="12" x2="21" y2="12" stroke="currentColor" stroke-width="1.6" opacity=".55"/><rect x="7" y="4.5" width="3.4" height="15" rx="1" fill="currentColor"/><rect x="13.6" y="7" width="3.4" height="10" rx="1" fill="currentColor"/></svg>`,
+  bottom:  `<svg viewBox="0 0 24 24"><line x1="4" y1="20" x2="20" y2="20" stroke="currentColor" stroke-width="1.6" opacity=".55"/><rect x="7" y="5" width="3.4" height="13" rx="1" fill="currentColor"/><rect x="13.6" y="10" width="3.4" height="8" rx="1" fill="currentColor"/></svg>`,
+  disth:   `<svg viewBox="0 0 24 24"><rect x="4" y="6" width="3.2" height="12" rx="1" fill="currentColor"/><rect x="10.4" y="6" width="3.2" height="12" rx="1" fill="currentColor"/><rect x="16.8" y="6" width="3.2" height="12" rx="1" fill="currentColor"/></svg>`,
+  distv:   `<svg viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="3.2" rx="1" fill="currentColor"/><rect x="6" y="10.4" width="12" height="3.2" rx="1" fill="currentColor"/><rect x="6" y="16.8" width="12" height="3.2" rx="1" fill="currentColor"/></svg>`,
+};
+
+/* Build the Align & Distribute panel for the multi-select inspector. `count` is
+   the number of items that can actually move (distribute needs at least 3). */
+function alignSection(count) {
+  const canDist = count >= 3;
+  const a = (op, title) => `<button type="button" data-align="${op}" title="${title}">${ALIGN_ICONS[op]}</button>`;
+  const d = (ax, title) => `<button type="button" data-dist="${ax}" title="${title}"${canDist ? '' : ' disabled'}>${ALIGN_ICONS['dist' + ax]}</button>`;
+  return `<div class="insp-row align-section">`
+    + `<label>Align edges &amp; centres</label>`
+    + `<div class="align-grid">`
+    + a('left', 'Align left edges') + a('hcenter', 'Align horizontal centres') + a('right', 'Align right edges')
+    + a('top', 'Align top edges') + a('vcenter', 'Align vertical centres') + a('bottom', 'Align bottom edges')
+    + `</div>`
+    + `<label style="margin-top:10px">Distribute evenly${canDist ? '' : ' (needs 3+)'}</label>`
+    + `<div class="align-grid">` + d('h', 'Space evenly left → right') + d('v', 'Space evenly top → bottom') + `</div>`
+    + `</div>`;
+}
+
+/* Movable (non-asset-bound) vertex indices for a pipe group ref. */
+function pipeMoveVerts(ref, p) {
+  const all = ref.verts || p.pts.map((_, i) => i);
+  return all.filter(i => p.pts[i] && !p.pts[i].node);
+}
+
+/* World-space bounding box for one selected ref, or null if it can't move
+   (e.g. a pipe whose only boxed points are pinned to assets). */
+function refBBox(ref) {
+  if (ref.kind === 'node') {
+    const n = nodeById(ref.id); if (!n) return null;
+    return { x1: n.x - n.w / 2, y1: n.y - n.h / 2, x2: n.x + n.w / 2, y2: n.y + n.h / 2 };
+  }
+  if (ref.kind === 'zone') {
+    const z = state.zones.find(z => z.id === ref.id); if (!z) return null;
+    return { x1: z.x, y1: z.y, x2: z.x + z.w, y2: z.y + z.h };
+  }
+  if (ref.kind === 'text') {
+    const t = state.texts.find(t => t.id === ref.id); if (!t) return null;
+    const m = textBlock(t);
+    return { x1: t.x, y1: t.y - m.ascent, x2: t.x + m.w, y2: t.y - m.ascent + m.h };
+  }
+  if (ref.kind === 'pipe') {
+    const p = state.pipes.find(p => p.id === ref.id); if (!p) return null;
+    const verts = pipeMoveVerts(ref, p);
+    if (!verts.length) return null;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const i of verts) { const pt = p.pts[i]; if (pt.x < x1) x1 = pt.x; if (pt.y < y1) y1 = pt.y; if (pt.x > x2) x2 = pt.x; if (pt.y > y2) y2 = pt.y; }
+    return { x1, y1, x2, y2 };
+  }
+  return null;
+}
+
+/* Nudge a ref's anchor(s) by (dx, dy). Pipes move only their boxed free points. */
+function translateRef(ref, dx, dy) {
+  if (!dx && !dy) return;
+  if (ref.kind === 'node') { const n = nodeById(ref.id); if (n) { n.x += dx; n.y += dy; } }
+  else if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); if (z) { z.x += dx; z.y += dy; } }
+  else if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); if (t) { t.x += dx; t.y += dy; } }
+  else if (ref.kind === 'pipe') {
+    const p = state.pipes.find(p => p.id === ref.id); if (!p) return;
+    for (const i of pipeMoveVerts(ref, p)) { p.pts[i].x += dx; p.pts[i].y += dy; }
+  }
+}
+
+/* Collect the selected refs that have a movable bounding box. */
+function alignableUnits() {
+  return group.map(ref => ({ ref, b: refBBox(ref) })).filter(u => u.b);
+}
+
+/* op: left | right | hcenter | top | bottom | vcenter. Edges align to the
+   selection's outer bounds; centres align to the selection's mid-point. */
+function alignSelection(op) {
+  const units = alignableUnits();
+  if (units.length < 2) return;
+  let minX1 = Infinity, maxX2 = -Infinity, minY1 = Infinity, maxY2 = -Infinity;
+  for (const { b } of units) {
+    if (b.x1 < minX1) minX1 = b.x1; if (b.x2 > maxX2) maxX2 = b.x2;
+    if (b.y1 < minY1) minY1 = b.y1; if (b.y2 > maxY2) maxY2 = b.y2;
+  }
+  const midX = (minX1 + maxX2) / 2, midY = (minY1 + maxY2) / 2;
+  mutate(() => {
+    for (const { ref, b } of units) {
+      let dx = 0, dy = 0;
+      if (op === 'left') dx = minX1 - b.x1;
+      else if (op === 'right') dx = maxX2 - b.x2;
+      else if (op === 'hcenter') dx = midX - (b.x1 + b.x2) / 2;
+      else if (op === 'top') dy = minY1 - b.y1;
+      else if (op === 'bottom') dy = maxY2 - b.y2;
+      else if (op === 'vcenter') dy = midY - (b.y1 + b.y2) / 2;
+      translateRef(ref, dx, dy);
+    }
+  });
+  renderInspector();
+}
+
+/* axis: 'h' or 'v'. Equal-gap distribution — the two outermost items hold their
+   positions and everything between is spaced so the gaps between boxes match. */
+function distributeSelection(axis) {
+  const units = alignableUnits();
+  if (units.length < 3) return;
+  const lo = axis === 'h' ? 'x1' : 'y1';
+  const hi = axis === 'h' ? 'x2' : 'y2';
+  units.sort((a, c) => a.b[lo] - c.b[lo]);
+  const start = units[0].b[lo];
+  const end = units[units.length - 1].b[hi];
+  let sizes = 0; for (const { b } of units) sizes += b[hi] - b[lo];
+  const gap = (end - start - sizes) / (units.length - 1);
+  mutate(() => {
+    let cursor = start;
+    for (const { ref, b } of units) {
+      const delta = cursor - b[lo];
+      translateRef(ref, axis === 'h' ? delta : 0, axis === 'h' ? 0 : delta);
+      cursor += (b[hi] - b[lo]) + gap;
+    }
+  });
+  renderInspector();
 }
 
 /* ============================================================

@@ -141,6 +141,14 @@ button{font-family:inherit;cursor:pointer}
 .btn-ghost{width:100%;background:#fff;border:1px solid var(--panel-line);border-radius:6px;padding:8px;font-size:12.5px;color:var(--text-dark);margin-top:6px}
 .btn-ghost:hover{background:#f8fafc}
 
+/* ---------- Align & distribute (multi-select) ---------- */
+.align-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+.align-grid button{display:flex;align-items:center;justify-content:center;height:32px;padding:0;
+  border:1px solid var(--panel-line);background:#fff;border-radius:6px;color:var(--text-dark);cursor:pointer}
+.align-grid button:hover:not(:disabled){background:var(--accent);border-color:var(--accent);color:#fff}
+.align-grid button:disabled{opacity:.4;cursor:default}
+.align-grid svg{width:18px;height:18px;display:block}
+
 /* ---------- Status bar ---------- */
 #statusbar{display:flex;align-items:center;gap:16px;height:26px;padding:0 14px;background:var(--ink);
   border-top:1px solid var(--line);font-size:11px;color:var(--text-dim);flex:0 0 auto;font-variant-numeric:tabular-nums}
