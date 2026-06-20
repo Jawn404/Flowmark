@@ -36,7 +36,7 @@ const PIPES = {
   coldTank:  { color: '#2563eb', width: 2,   dash: [7, 5], name: 'Cold — tank' },
   hotFlow:   { color: '#dc2626', width: 2,   dash: [],     name: 'Hot — flow' },
   hotReturn: { color: '#dc2626', width: 2,   dash: [7, 5], name: 'Hot — return' },
-  deadleg:   { color: '#e08a00', width: 3,   dash: [3, 5], name: 'Deadleg' },
+  deadleg:   { color: '#000000', width: 3,   dash: [],     name: 'Deadleg' },
 };
 const RISK = { A: '#16a34a', B: '#65a30d', C: '#d97706', D: '#ea580c', E: '#dc2626' };
 const ZONE_COLORS = ['#e0f2fe', '#dcfce7', '#fef9c3', '#fae8ff', '#ffedd5', '#e2e8f0'];
@@ -402,7 +402,7 @@ function drawNode(c, n, S, OX, OY) {
       break;
     }
     case 'cap': {
-      c.strokeStyle = '#e08a00'; c.lineWidth = 2.4;
+      c.strokeStyle = '#000000'; c.lineWidth = 2.4;
       c.beginPath(); c.moveTo(cx - w * .4, cy); c.lineTo(cx + w * .15, cy); c.stroke();
       c.beginPath(); c.moveTo(cx + w * .15, cy - h * .35); c.lineTo(cx + w * .15, cy + h * .35); c.stroke();
       break;

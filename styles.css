@@ -24,7 +24,8 @@
   /* engineering conventions */
   --cold:#2563eb;
   --hot:#dc2626;
-  --deadleg:#e08a00;
+  --deadleg:#000000;
+  --warn:#e08a00;
   --ok:#16a34a;
   --risk-a:#16a34a;--risk-b:#65a30d;--risk-c:#d97706;--risk-d:#ea580c;--risk-e:#dc2626;
   --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
@@ -87,7 +88,7 @@ button{font-family:inherit;cursor:pointer}
 .cold-tank::after{border-top:2.5px dotted var(--cold)}
 .hot-flow::after{border-top:2.5px solid var(--hot)}
 .hot-return::after{border-top:2.5px dashed var(--hot)}
-.deadleg::after{border-top:3px dashed var(--deadleg)}
+.deadleg::after{border-top:3px solid var(--deadleg)}
 
 /* ---------- Stage / canvas ---------- */
 #stage{position:relative;flex:1;min-width:0;background:var(--desk);overflow:hidden;touch-action:none}
@@ -144,7 +145,7 @@ button{font-family:inherit;cursor:pointer}
 #statusbar{display:flex;align-items:center;gap:16px;height:26px;padding:0 14px;background:var(--ink);
   border-top:1px solid var(--line);font-size:11px;color:var(--text-dim);flex:0 0 auto;font-variant-numeric:tabular-nums}
 #statusTool{color:var(--accent);font-weight:600}
-.saved{color:var(--ok)}.saved.unsaved{color:var(--deadleg)}
+.saved{color:var(--ok)}.saved.unsaved{color:var(--warn)}
 
 /* ---------- Modal (PDF import) ---------- */
 .modal-backdrop,.sheet-backdrop{position:fixed;inset:0;background:rgba(8,14,20,.55);backdrop-filter:blur(3px);
