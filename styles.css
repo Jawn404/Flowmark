@@ -92,7 +92,7 @@ button{font-family:inherit;cursor:pointer}
 
 /* ---------- Stage / canvas ---------- */
 #stage{position:relative;flex:1;min-width:0;background:var(--desk);overflow:hidden;touch-action:none}
-#canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
 .view-ctrls{position:absolute;left:12px;bottom:12px;display:flex;gap:4px;background:rgba(22,32,44,.92);
   backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 4px 14px rgba(0,0,0,.25)}
 .view-ctrls button{background:transparent;border:none;color:var(--text-dim);font-size:12px;font-weight:600;

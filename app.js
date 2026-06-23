@@ -750,6 +750,34 @@ function startGroupDrag(w) {
   return { mode: 'group', origin: w, items };
 }
 
+/* Move the current selection (single or multi) by a world-space delta —
+   used by the arrow keys. Asset-bound pipe endpoints (green handles) follow
+   their node, so they're skipped here, matching drag behaviour. Nudges are
+   deliberately NOT re-snapped to the grid: like alignment, the offset is
+   exactly what was asked for. Rapid presses within a short window coalesce
+   into a single undo step so holding an arrow doesn't flood the undo stack. */
+let nudgeBurst = 0;
+function nudgeSelection(dx, dy) {
+  const refs = group.length ? group : (sel ? [sel] : []);
+  if (!refs.length) return;
+  const now = Date.now();
+  if (now - nudgeBurst > 700) snapshot();   // first nudge of a burst => undo point
+  nudgeBurst = now;
+  for (const ref of refs) {
+    if (ref.kind === 'node') { const n = nodeById(ref.id); if (n) { n.x += dx; n.y += dy; } }
+    else if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); if (t) { t.x += dx; t.y += dy; } }
+    else if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); if (z) { z.x += dx; z.y += dy; } }
+    else if (ref.kind === 'pipe') {
+      const p = state.pipes.find(p => p.id === ref.id);
+      if (p) {
+        const verts = ref.verts || p.pts.map((_, i) => i);
+        for (const i of verts) { const pt = p.pts[i]; if (pt && !pt.node) { pt.x += dx; pt.y += dy; } }
+      }
+    }
+  }
+  commit();
+}
+
 /* ============================================================
    POINTER / TOOLS
    ============================================================ */
@@ -1833,7 +1861,7 @@ $('#menuSheet').addEventListener('click', e => {
   closeMenu();
   if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Arrow keys nudge (Shift = grid step) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -1858,6 +1886,18 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); cutSelection(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
+  // Arrow keys nudge the selection: 1px for fine control, Shift+arrow moves a
+  // full grid cell. Skipped while a pipe is being drawn, and while typing in a
+  // field (handled by the INPUT/TEXTAREA/SELECT guard at the top).
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && !draft && (sel || group.length) &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault();
+    const step = e.shiftKey ? GRID : 1;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    nudgeSelection(dx, dy);
+    return;
+  }
   if (!e.ctrlKey && !e.metaKey) {
     const k = e.key.toLowerCase();
     if (k === 'r' && sel && sel.kind === 'node') {
