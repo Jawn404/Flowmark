@@ -153,6 +153,25 @@ function wrapWords(line, font, maxW) {
   if (cur) out.push(cur);
   return out.length ? out : [''];
 }
+/* Zone name tab geometry (world units). The tab is a fixed-height banner sized
+   to the label; `z.labelPos` ('tl' default, plus tc/tr/bl/bc/br) places it on a
+   chosen corner or edge-centre so it can be moved clear of schematic content.
+   Returns null for unlabelled zones. Used by both the renderer and hit-test so
+   the grab band always tracks the drawn tab. */
+const ZONE_TAB_H = 20;          // screen px, constant regardless of zoom
+function zoneLabelRect(z, S) {
+  if (!z.label) return null;
+  _measCtx.font = `700 ${Math.max(11, 13 * Math.min(S, 1.4))}px ${LABEL_FONT_STACK}`;
+  const ww = (_measCtx.measureText(z.label).width + 16) / S;
+  const hh = ZONE_TAB_H / S;
+  const pos = z.labelPos || 'tl';
+  let lx = z.x, ly = z.y;
+  if (pos === 'tr' || pos === 'br') lx = z.x + z.w - ww;
+  else if (pos === 'tc' || pos === 'bc') lx = z.x + (z.w - ww) / 2;
+  if (pos[0] === 'b') ly = z.y + z.h - hh;
+  return { x: lx, y: ly, w: ww, h: hh };
+}
+
 function textLines(t) {
   const raw = String(t.text == null ? '' : t.text).split(/\r?\n/);
   const wrap = +t.wrap || 0;
@@ -279,12 +298,13 @@ function drawScene(c, T, opts = {}) {
     c.strokeStyle = '#7c93a8'; c.lineWidth = 1.5; c.setLineDash([6, 5]);
     c.strokeRect(x, y, w, h); c.setLineDash([]);
     if (z.label) {
-      c.font = `700 ${Math.max(11, 13 * Math.min(S, 1.4))}px var(--sans,system-ui)`;
-      const lw = c.measureText(z.label).width + 16;
+      const lr = zoneLabelRect(z, S);
+      const lx = X(lr.x), ly = Y(lr.y), lw = lr.w * S, lh = lr.h * S;
+      c.font = `700 ${Math.max(11, 13 * Math.min(S, 1.4))}px ${LABEL_FONT_STACK}`;
       c.fillStyle = '#475569'; c.globalAlpha = .9;
-      c.fillRect(x, y, lw, 20); c.globalAlpha = 1;
+      c.fillRect(lx, ly, lw, lh); c.globalAlpha = 1;
       c.fillStyle = '#fff'; c.textAlign = 'left'; c.textBaseline = 'middle';
-      c.fillText(z.label, x + 8, y + 11);
+      c.fillText(z.label, lx + 8, ly + lh / 2 + 1);
     }
   }
   // pipes
@@ -625,7 +645,8 @@ function hitZoneHandle(z, wpt) {
 function hitZoneLabel(wpt) {
   for (let i = state.zones.length - 1; i >= 0; i--) {
     const z = state.zones[i];
-    if (wpt.x >= z.x && wpt.x <= z.x + 120 && wpt.y >= z.y && wpt.y <= z.y + 20 / view.scale) return z;
+    const lr = zoneLabelRect(z, view.scale);
+    if (lr && wpt.x >= lr.x && wpt.x <= lr.x + lr.w && wpt.y >= lr.y && wpt.y <= lr.y + lr.h) return z;
     // border band
     const onBorder = (Math.abs(wpt.x - z.x) < 6 / view.scale || Math.abs(wpt.x - (z.x + z.w)) < 6 / view.scale) && wpt.y >= z.y - 6 && wpt.y <= z.y + z.h + 6
       || (Math.abs(wpt.y - z.y) < 6 / view.scale || Math.abs(wpt.y - (z.y + z.h)) < 6 / view.scale) && wpt.x >= z.x - 6 && wpt.x <= z.x + z.w + 6;
@@ -1053,6 +1074,18 @@ function autoLabel(type) {
    ============================================================ */
 function select(s) { group = []; sel = s; renderInspector(); draw(); if (s && window.innerWidth <= 880) $('#inspector').classList.add('open'); }
 
+/* Zone name-tab placement options, laid out as a 3×2 grid (top row / bottom row).
+   Each glyph shows the area box with the tab marked at the matching corner/edge. */
+const ZONE_LABELPOS = [
+  ['tl', 'Top left'], ['tc', 'Top centre'], ['tr', 'Top right'],
+  ['bl', 'Bottom left'], ['bc', 'Bottom centre'], ['br', 'Bottom right'],
+];
+function zoneLabelPosIcon(pos) {
+  const tx = (pos === 'tr' || pos === 'br') ? 13 : (pos === 'tc' || pos === 'bc') ? 8 : 3;
+  const ty = pos[0] === 'b' ? 16 : 4;
+  return `<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="1.5" stroke="currentColor" stroke-width="1.6"/><rect x="${tx}" y="${ty}" width="8" height="4" rx="1" fill="currentColor"/></svg>`;
+}
+
 function renderInspector() {
   const body = $('#inspBody'), empty = $('#inspEmpty');
   if (group.length >= 1) {
@@ -1104,6 +1137,7 @@ function renderInspector() {
     const z = state.zones.find(z => z.id === sel.id); if (!z) return select(null);
     h += `<div class="insp-head"><span class="badge">AREA</span><h3>Floor / area</h3></div>`;
     h += row('Name', `<input class="i-zlabel" value="${esc(z.label)}">`);
+    h += `<div class="insp-row"><label>Name position</label><div class="pos-grid">${ZONE_LABELPOS.map(([p, t]) => `<button type="button" class="${(z.labelPos || 'tl') === p ? 'sel' : ''}" data-zpos="${p}" title="${t}">${zoneLabelPosIcon(p)}</button>`).join('')}</div></div>`;
     h += `<div class="insp-row"><label>Fill colour</label><div class="swatch-row">${ZONE_COLORS.map(c => `<div class="swatch ${z.color === c ? 'sel' : ''}" data-zc="${c}" style="background:${c}"></div>`).join('')}</div></div>`;
     h += `<button class="btn-del" data-del>Delete area</button>`;
   } else if (sel.kind === 'text') {
@@ -1149,6 +1183,7 @@ function wireInspector() {
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id);
     set('.i-zlabel', 'input', e => { z.label = e.target.value; dirty = true; draw(); });
+    $$('[data-zpos]', body).forEach(b => b.addEventListener('click', () => { z.labelPos = b.dataset.zpos; renderInspector(); commit(); }));
     $$('[data-zc]', body).forEach(s => s.addEventListener('click', () => { z.color = s.dataset.zc; renderInspector(); commit(); }));
   } else if (sel.kind === 'text') {
     const t = state.texts.find(t => t.id === sel.id);
