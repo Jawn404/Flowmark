@@ -22,8 +22,10 @@ function pageBounds() { const d = pageDims(); return { x: 0, y: 0, w: d.w, h: d.
 
 /* ---------- Asset & pipe definitions ---------- */
 const ASSETS = {
-  tank:   { w: 84, h: 54, name: 'Cold water storage tank', tag: 'TK', fields: ['volume', 'risk'] },
-  heater: { w: 46, h: 56, name: 'Water heater / calorifier', tag: 'WH', fields: ['volume', 'risk'] },
+  tank:     { w: 84, h: 54, name: 'Cold water storage tank', tag: 'TK', fields: ['volume', 'risk'] },
+  softener: { w: 40, h: 60, name: 'Water softener', tag: 'WS', fields: ['volume', 'risk'] },
+  heater:   { w: 46, h: 56, name: 'Water heater / calorifier', tag: 'WH', fields: ['volume', 'risk'] },
+  boiler:   { w: 52, h: 60, name: 'Steam boiler', tag: 'SB', fields: ['volume', 'risk'] },
   pump:   { w: 30, h: 30, name: 'Pump', tag: 'P', fields: [] },
   tmv:    { w: 28, h: 28, name: 'Thermostatic mixing valve', tag: 'T', fields: ['risk'] },
   mixer:  { w: 28, h: 28, name: 'Mixer tap', tag: 'M', fields: [] },
@@ -368,6 +370,34 @@ function drawNode(c, n, S, OX, OY) {
       c.fillText(lab, cx, cy + 2);
       break;
     }
+    case 'softener': {
+      // Resin/brine vessel: tall body, a valve head on top, and a granular
+      // resin bed in the lower third — distinct from the flat CWST tank.
+      const cap = Math.min(S, 1.4);
+      const headH = h * 0.14;
+      const bodyY = y + headH;
+      c.fillStyle = '#eef4fa'; c.strokeStyle = '#33485f'; c.lineWidth = 1.6;
+      roundRect(c, x, bodyY, w, h - headH, 6); c.fill(); c.stroke();
+      // valve head block on top
+      c.fillStyle = '#d7e2ee';
+      roundRect(c, x + w * 0.28, y, w * 0.44, headH + 5, 2); c.fill(); c.stroke();
+      // resin bed band (lower portion) with granule dots, clipped to the body
+      const bandTop = y + h * 0.62;
+      c.save();
+      roundRect(c, x, bodyY, w, h - headH, 6); c.clip();
+      c.fillStyle = '#dce8f3'; c.fillRect(x, bandTop, w, (y + h) - bandTop);
+      c.fillStyle = '#9db4c9';
+      const dot = Math.max(0.7, cap), gstep = 5.5 * cap;
+      for (let gy = bandTop + 3; gy < y + h - 2; gy += gstep)
+        for (let gx = x + 4; gx < x + w - 2; gx += gstep) { c.beginPath(); c.arc(gx, gy, dot, 0, 7); c.fill(); }
+      c.restore();
+      c.strokeStyle = '#9db4c9'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x, bandTop); c.lineTo(x + w, bandTop); c.stroke();
+      // label in the clear upper part of the body
+      c.fillStyle = '#1f2c3a'; c.font = monoFont(700);
+      c.fillText(lab, cx, bodyY + (bandTop - bodyY) * 0.5 + 1);
+      break;
+    }
     case 'heater': {
       c.fillStyle = '#fdeeee'; c.strokeStyle = '#b03636'; c.lineWidth = 1.6;
       roundRect(c, x, y, w, h, 6); c.fill(); c.stroke();
@@ -376,6 +406,46 @@ function drawNode(c, n, S, OX, OY) {
       c.fillStyle = '#7a2020'; c.font = monoFont(700);
       c.fillText(lab, cx, cy - (n.props && n.props.volume ? 6 : 0));
       if (n.props && n.props.volume) { c.font = `${Math.max(7, 8.5 * Math.min(S, 1.4))}px var(--mono,monospace)`; c.fillText(n.props.volume + 'L', cx, cy + 9 * Math.min(S, 1.3)); }
+      break;
+    }
+    case 'boiler': {
+      // Steam boiler: warm pressure vessel with steam plumes rising and a
+      // burner flame beneath — reads as the hot, steam-raising side of plant.
+      const cap = Math.min(S, 1.4);
+      const steamH = h * 0.20, flameH = h * 0.16;
+      const bodyY = y + steamH, bodyH = h - steamH - flameH;
+      c.fillStyle = '#fdeeee'; c.strokeStyle = '#b03636'; c.lineWidth = 1.6;
+      roundRect(c, x, bodyY, w, bodyH, 6); c.fill(); c.stroke();
+      // water level line
+      c.strokeStyle = '#d99'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x + 4, bodyY + bodyH * 0.4); c.lineTo(x + w - 4, bodyY + bodyH * 0.4); c.stroke();
+      // steam plumes rising from the crown
+      c.strokeStyle = '#9db4c9'; c.lineWidth = 1.2 * Math.max(.8, cap); c.lineCap = 'round';
+      for (let i = -1; i <= 1; i++) {
+        const px = cx + i * w * 0.26;
+        c.beginPath();
+        c.moveTo(px, bodyY);
+        c.bezierCurveTo(px - w * 0.12, y + steamH * 0.6, px + w * 0.12, y + steamH * 0.35, px, y + 1.5);
+        c.stroke();
+      }
+      c.lineCap = 'butt';
+      // burner flame beneath the vessel (outer + inner cone)
+      const fb = y + h - flameH, fw = w * 0.18;
+      c.fillStyle = '#ea580c';
+      c.beginPath();
+      c.moveTo(cx - fw, y + h);
+      c.quadraticCurveTo(cx - fw, fb + flameH * 0.2, cx, fb);
+      c.quadraticCurveTo(cx + fw, fb + flameH * 0.2, cx + fw, y + h);
+      c.closePath(); c.fill();
+      c.fillStyle = '#fbbf24';
+      c.beginPath();
+      c.moveTo(cx - fw * 0.45, y + h);
+      c.quadraticCurveTo(cx - fw * 0.45, fb + flameH * 0.5, cx, fb + flameH * 0.35);
+      c.quadraticCurveTo(cx + fw * 0.45, fb + flameH * 0.5, cx + fw * 0.45, y + h);
+      c.closePath(); c.fill();
+      // label inside the vessel
+      c.fillStyle = '#7a2020'; c.font = monoFont(700);
+      c.fillText(lab, cx, bodyY + bodyH * 0.62);
       break;
     }
     case 'pump': {
