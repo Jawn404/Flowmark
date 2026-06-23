@@ -752,14 +752,39 @@ function startGroupDrag(w) {
 
 /* Move the current selection (single or multi) by a world-space delta —
    used by the arrow keys. Asset-bound pipe endpoints (green handles) follow
-   their node, so they're skipped here, matching drag behaviour. Nudges are
-   deliberately NOT re-snapped to the grid: like alignment, the offset is
-   exactly what was asked for. Rapid presses within a short window coalesce
-   into a single undo step so holding an arrow doesn't flood the undo stack. */
+   their node, so they're skipped here, matching drag behaviour. Rapid presses
+   within a short window coalesce into a single undo step so holding an arrow
+   doesn't flood the undo stack.
+
+   gridAlign (set when grid-snap is on and Shift isn't held): instead of a raw
+   delta, dx/dy carry only a direction (±1/0). We snap a single anchor to the
+   next grid line in that direction and move the whole selection by that delta,
+   so items land on the same positions the grid snaps to while the selection
+   keeps its internal layout. Shift bypasses this for exact 1px precision. */
 let nudgeBurst = 0;
-function nudgeSelection(dx, dy) {
+function nudgeAnchor(ref) {
+  if (ref.kind === 'node') { const n = nodeById(ref.id); return n ? { x: n.x, y: n.y } : null; }
+  if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); return t ? { x: t.x, y: t.y } : null; }
+  if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); return z ? { x: z.x, y: z.y } : null; }
+  if (ref.kind === 'pipe') {
+    const p = state.pipes.find(p => p.id === ref.id); if (!p) return null;
+    const verts = ref.verts || p.pts.map((_, i) => i);
+    for (const i of verts) { const pt = p.pts[i]; if (pt && !pt.node) return { x: pt.x, y: pt.y }; }
+    return null;
+  }
+  return null;
+}
+function nudgeSelection(dx, dy, gridAlign) {
   const refs = group.length ? group : (sel ? [sel] : []);
   if (!refs.length) return;
+  if (gridAlign) {
+    const a = nudgeAnchor(refs[0]);
+    if (a) {
+      if (dx) { const t = dx > 0 ? (Math.floor(a.x / GRID) + 1) * GRID : (Math.ceil(a.x / GRID) - 1) * GRID; dx = t - a.x; }
+      if (dy) { const t = dy > 0 ? (Math.floor(a.y / GRID) + 1) * GRID : (Math.ceil(a.y / GRID) - 1) * GRID; dy = t - a.y; }
+    } else { dx = dx ? Math.sign(dx) * GRID : 0; dy = dy ? Math.sign(dy) * GRID : 0; }
+  }
+  if (!dx && !dy) return;
   const now = Date.now();
   if (now - nudgeBurst > 700) snapshot();   // first nudge of a burst => undo point
   nudgeBurst = now;
@@ -878,11 +903,11 @@ function onDown(e) {
   const n = hitNode(w);
   if (n) { select({ kind: 'node', id: n.id }); snapshot(); drag = { mode: 'node', node: n, dx: w.x - n.x, dy: w.y - n.y }; return; }
   const p = hitPipe(w);
-  if (p) { select({ kind: 'pipe', id: p.id }); snapshot(); drag = { mode: 'pipe', pipe: p, last: w }; return; }
+  if (p) { select({ kind: 'pipe', id: p.id }); snapshot(); drag = { mode: 'pipe', pipe: p, origin: w, orig: p.pts.map(pt => ({ x: pt.x, y: pt.y })) }; return; }
   const t = hitText(w);
   if (t) { select({ kind: 'text', id: t.id }); snapshot(); drag = { mode: 'text', text: t, dx: w.x - t.x, dy: w.y - t.y }; return; }
   const z = hitZoneLabel(w);
-  if (z) { select({ kind: 'zone', id: z.id }); snapshot(); drag = { mode: 'zone', zone: z, last: w }; return; }
+  if (z) { select({ kind: 'zone', id: z.id }); snapshot(); drag = { mode: 'zone', zone: z, origin: w, ox: z.x, oy: z.y }; return; }
   // empty space: start a marquee (drag-box) selection. Pan is still available via
   // space-drag, middle mouse, the Pan tool (H), the wheel/trackpad, or two fingers.
   select(null);
@@ -928,14 +953,16 @@ function onMove(e) {
     dirty = true; draw(); return;
   }
   if (drag.mode === 'pipe') {
-    const dx = w.x - drag.last.x, dy = w.y - drag.last.y;
-    for (const pt of drag.pipe.pts) if (!pt.node) { pt.x = snap(pt.x + dx); pt.y = snap(pt.y + dy); }
-    drag.last = w; dirty = true; draw(); return;
+    let dx = w.x - drag.origin.x, dy = w.y - drag.origin.y;
+    if (snapOn) { dx = Math.round(dx / GRID) * GRID; dy = Math.round(dy / GRID) * GRID; }
+    drag.pipe.pts.forEach((pt, i) => { const o = drag.orig[i]; if (pt && o && !pt.node) { pt.x = o.x + dx; pt.y = o.y + dy; } });
+    dirty = true; draw(); return;
   }
   if (drag.mode === 'zone') {
-    const dx = w.x - drag.last.x, dy = w.y - drag.last.y;
-    drag.zone.x = snap(drag.zone.x + dx); drag.zone.y = snap(drag.zone.y + dy);
-    drag.last = w; dirty = true; draw(); return;
+    let dx = w.x - drag.origin.x, dy = w.y - drag.origin.y;
+    if (snapOn) { dx = Math.round(dx / GRID) * GRID; dy = Math.round(dy / GRID) * GRID; }
+    drag.zone.x = drag.ox + dx; drag.zone.y = drag.oy + dy;
+    dirty = true; draw(); return;
   }
   if (drag.mode === 'zoneNew') {
     if (!drag.id) { const z = { id: uid(), x: drag.start.x, y: drag.start.y, w: GRID, h: GRID, label: 'Area', color: ZONE_COLORS[state.zones.length % ZONE_COLORS.length] }; state.zones.unshift(z); drag.id = z.id; snapshot(); }
@@ -1861,7 +1888,7 @@ $('#menuSheet').addEventListener('click', e => {
   closeMenu();
   if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Arrow keys nudge (Shift = grid step) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -1886,16 +1913,22 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); cutSelection(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); }
-  // Arrow keys nudge the selection: 1px for fine control, Shift+arrow moves a
-  // full grid cell. Skipped while a pipe is being drawn, and while typing in a
-  // field (handled by the INPUT/TEXTAREA/SELECT guard at the top).
+  // Arrow keys nudge the selection. With grid-snap on, a plain arrow moves the
+  // selection onto the next grid line (so it lands on the grid snap positions),
+  // and Shift+arrow gives exact 1px precision. With snap off, plain arrow is 1px
+  // and Shift+arrow steps a full grid cell. Skipped while drawing a pipe, and
+  // while typing (handled by the INPUT/TEXTAREA/SELECT guard at the top).
   if (!e.ctrlKey && !e.metaKey && !e.altKey && !draft && (sel || group.length) &&
       (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
     e.preventDefault();
-    const step = e.shiftKey ? GRID : 1;
-    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-    nudgeSelection(dx, dy);
+    const dirX = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    const dirY = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+    if (snapOn && !e.shiftKey) {
+      nudgeSelection(dirX, dirY, true);
+    } else {
+      const step = (!snapOn && e.shiftKey) ? GRID : 1;
+      nudgeSelection(dirX * step, dirY * step, false);
+    }
     return;
   }
   if (!e.ctrlKey && !e.metaKey) {
