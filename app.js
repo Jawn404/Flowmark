@@ -1873,10 +1873,6 @@ $('#btnExportPdf').onclick = async () => {
     const landscape = pageDims().w >= pageDims().h;
     const pdf = new jsPDF({ orientation: landscape ? 'l' : 'p', unit: 'mm', format: 'a4' });
     const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
-    const margin = 8;
-    const aw = pw - margin * 2, ah = ph - margin * 2;
-    const ratio = Math.min(aw / r.canvas.width, ah / r.canvas.height);
-    const w = r.canvas.width * ratio, h = r.canvas.height * ratio;
     // Line art at 314 DPI: JPEG q0.95 keeps ringing sub-pixel at print size
     // while holding the file to ~1-2MB. PNG here is lossless but balloons to
     // ~30MB because the browser encoder stores every antialiased edge pixel.
@@ -1884,7 +1880,11 @@ $('#btnExportPdf').onclick = async () => {
     // jsPDF context2d) — deferred: drawScene's Math.min(S,cap) width/font
     // clamps assume S≈1, so it needs a compose-at-1-then-scale path first.
     const img = r.canvas.toDataURL('image/jpeg', 0.95);
-    pdf.addImage(img, 'JPEG', (pw - w) / 2, (ph - h) / 2, w, h);
+    // Fill the whole A4 page edge-to-edge so the branded footer bleeds to the
+    // paper edge with no white margin. The sheet aspect (1.40) is within ~1% of
+    // true A4 (1.414), so filling applies an imperceptible stretch rather than
+    // letterboxing the sheet with white bars on the sides and bottom.
+    pdf.addImage(img, 'JPEG', 0, 0, pw, ph);
     pdf.save((state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.pdf');
     toast('PDF exported');
   } catch (e) { toast('PDF export needs a connection the first time'); }
