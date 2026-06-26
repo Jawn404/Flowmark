@@ -1733,8 +1733,14 @@ $('#btnExportPdf').onclick = async () => {
     const aw = pw - margin * 2, ah = ph - margin * 2;
     const ratio = Math.min(aw / r.canvas.width, ah / r.canvas.height);
     const w = r.canvas.width * ratio, h = r.canvas.height * ratio;
-    const img = r.canvas.toDataURL('image/png');
-    pdf.addImage(img, 'PNG', (pw - w) / 2, (ph - h) / 2, w, h);
+    // Line art at 314 DPI: JPEG q0.95 keeps ringing sub-pixel at print size
+    // while holding the file to ~1-2MB. PNG here is lossless but balloons to
+    // ~30MB because the browser encoder stores every antialiased edge pixel.
+    // The print-perfect + small route is a true vector PDF (drawScene via
+    // jsPDF context2d) — deferred: drawScene's Math.min(S,cap) width/font
+    // clamps assume S≈1, so it needs a compose-at-1-then-scale path first.
+    const img = r.canvas.toDataURL('image/jpeg', 0.95);
+    pdf.addImage(img, 'JPEG', (pw - w) / 2, (ph - h) / 2, w, h);
     pdf.save((state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.pdf');
     toast('PDF exported');
   } catch (e) { toast('PDF export needs a connection the first time'); }
