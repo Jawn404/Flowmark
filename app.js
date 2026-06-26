@@ -1651,19 +1651,69 @@ function autosave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { tr
 function loadAutosave() { try { const s = localStorage.getItem(LS_KEY); if (s) { state = normalize(JSON.parse(s)); return true; } } catch (e) { } return false; }
 function normalize(s) { s.zones ||= []; s.nodes ||= []; s.pipes ||= []; s.texts ||= []; s.page ||= { orientation: 'landscape' }; if (s.page.orientation !== 'portrait') s.page.orientation = 'landscape'; s.name ||= 'Untitled schematic'; for (const n of s.nodes) n.props ||= {}; return s; }
 
-$('#btnSave').onclick = () => {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-  download(blob, (state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.flowmark.json');
+/* File System Access API lets us write straight back over an existing file
+   (a real "Save as" dialog + silent overwrite of the chosen file). Falls back
+   to a download for browsers that don't support it (e.g. Firefox, Safari). */
+let fileHandle = null;
+const FS_SAVE = typeof window.showSaveFilePicker === 'function';
+const FS_OPEN = typeof window.showOpenFilePicker === 'function';
+const FS_TYPES = [{ description: 'FlowMark project', accept: { 'application/json': ['.json'] } }];
+function projectFilename() { return (state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.flowmark.json'; }
+
+async function saveProject(forceDialog = false) {
+  const text = JSON.stringify(state, null, 2);
+  if (FS_SAVE) {
+    try {
+      // No file chosen yet (or "Save as"): open the Save-as dialog so the
+      // user can pick / overwrite a file. After that, plain Save writes
+      // straight back to it with no dialog.
+      if (!fileHandle || forceDialog) {
+        const opts = { suggestedName: fileHandle ? fileHandle.name : projectFilename(), types: FS_TYPES };
+        if (fileHandle) opts.startIn = fileHandle;
+        fileHandle = await window.showSaveFilePicker(opts);
+      }
+      const w = await fileHandle.createWritable();
+      await w.write(text);
+      await w.close();
+      dirty = false; updateStatus(); toast('Saved to ' + fileHandle.name);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // user cancelled the dialog
+      console.error(err); toast('Could not save to that file');
+    }
+    return;
+  }
+  // Fallback: trigger a download (cannot overwrite in place on these browsers).
+  const blob = new Blob([text], { type: 'application/json' });
+  download(blob, projectFilename());
   dirty = false; updateStatus(); toast('Project saved to file');
+}
+
+$('#btnSave').onclick = () => saveProject(false);
+
+$('#btnOpen').onclick = async () => {
+  if (FS_OPEN) {
+    try {
+      const [h] = await window.showOpenFilePicker({ multiple: false, types: [{ description: 'FlowMark project', accept: { 'application/json': ['.json', '.flowmark'] } }] });
+      const f = await h.getFile();
+      const txt = await f.text();
+      state = normalize(JSON.parse(txt));
+      fileHandle = h; // future saves overwrite the file that was opened
+      sel = null; renderInspector(); fitView(); updateStatus(); dirty = false; toast('Project opened');
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      console.error(err); toast('That file could not be read');
+    }
+    return;
+  }
+  $('#fileOpen').click(); // fallback for browsers without the picker
 };
-$('#btnOpen').onclick = () => $('#fileOpen').click();
 $('#fileOpen').onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   const rd = new FileReader();
-  rd.onload = () => { try { state = normalize(JSON.parse(rd.result)); sel = null; renderInspector(); fitView(); updateStatus(); dirty = false; toast('Project opened'); } catch (err) { toast('That file could not be read'); } };
+  rd.onload = () => { try { state = normalize(JSON.parse(rd.result)); fileHandle = null; sel = null; renderInspector(); fitView(); updateStatus(); dirty = false; toast('Project opened'); } catch (err) { toast('That file could not be read'); } };
   rd.readAsText(f); e.target.value = '';
 };
-$('#btnNew').onclick = () => { if (dirty && !confirm('Start a new schematic? Unsaved changes will be lost.')) return; state = blankState(); sel = null; renderInspector(); dirty = false; updateStatus(); fitView(); };
+$('#btnNew').onclick = () => { if (dirty && !confirm('Start a new schematic? Unsaved changes will be lost.')) return; state = blankState(); fileHandle = null; sel = null; renderInspector(); dirty = false; updateStatus(); fitView(); };
 
 $('#projectName').onclick = () => { const v = prompt('Project name:', state.name); if (v != null) { state.name = v.trim() || 'Untitled schematic'; dirty = true; updateStatus(); } };
 
@@ -1999,7 +2049,8 @@ $('#menuSheet').addEventListener('click', e => {
   const btn = e.target.closest('button[data-act]'); if (!btn) return;
   const act = btn.dataset.act;
   closeMenu();
-  if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
+  if (act === 'saveas') saveProject(true);
+  else if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
   else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
@@ -2065,7 +2116,7 @@ function redo() { if (!redoStack.length) return; undoStack.push(JSON.stringify(s
    ============================================================ */
 function loadSample() {
   snapshot();
-  state = blankState(); state.name = 'Sample — single plant room';
+  state = blankState(); state.name = 'Sample — single plant room'; fileHandle = null;
   const Z = (x, y, w, h, label, color) => { const z = { id: uid(), x, y, w, h, label, color }; state.zones.push(z); return z; };
   const N = (type, x, y, label, props = {}) => { const a = ASSETS[type]; const n = { id: uid(), type, x, y, w: a.w, h: a.h, label, props }; state.nodes.push(n); return n; };
   const P = (type, pts) => state.pipes.push({ id: uid(), type, pts });
