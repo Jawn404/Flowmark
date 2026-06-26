@@ -1672,8 +1672,10 @@ function download(blob, name) { const u = URL.createObjectURL(blob); const a = d
 /* ============================================================
    EXPORT  (JPG + PDF)
    ============================================================ */
-function renderExportCanvas(ss = 2.5, compose = 1) {
+function renderExportCanvas(ss = 3, compose = 1) {
   // ss      = supersample factor — output resolution / crispness only.
+  //           3.0 puts a 1120×800 sheet at ~3360×2400 px, ≈314 DPI on the A4
+  //           print area — clears the 300 DPI print standard with headroom.
   // compose = world->css scale the scene is composed at. Kept at 1 (100%) so the
   //           text:geometry ratio matches the on-screen app, since label/line sizes
   //           use Math.min(S, cap) clamps that only stay proportional while S <= cap.
@@ -1709,8 +1711,8 @@ function renderExportCanvas(ss = 2.5, compose = 1) {
 }
 
 $('#btnExportImg').onclick = () => {
-  const r = renderExportCanvas(2.5); if (!r) return;
-  r.canvas.toBlob(b => { download(b, (state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.jpg'); toast('JPG exported'); }, 'image/jpeg', 0.92);
+  const r = renderExportCanvas(); if (!r) return;
+  r.canvas.toBlob(b => { download(b, (state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.jpg'); toast('JPG exported'); }, 'image/jpeg', 0.96);
 };
 
 let jspdfLoading;
@@ -1720,7 +1722,7 @@ async function ensureJsPDF() {
   await jspdfLoading; return window.jspdf.jsPDF;
 }
 $('#btnExportPdf').onclick = async () => {
-  const r = renderExportCanvas(2.5); if (!r) return;
+  const r = renderExportCanvas(); if (!r) return;
   toast('Building PDF…', 1500);
   try {
     const jsPDF = await ensureJsPDF();
@@ -1731,8 +1733,8 @@ $('#btnExportPdf').onclick = async () => {
     const aw = pw - margin * 2, ah = ph - margin * 2;
     const ratio = Math.min(aw / r.canvas.width, ah / r.canvas.height);
     const w = r.canvas.width * ratio, h = r.canvas.height * ratio;
-    const img = r.canvas.toDataURL('image/jpeg', 0.92);
-    pdf.addImage(img, 'JPEG', (pw - w) / 2, (ph - h) / 2, w, h);
+    const img = r.canvas.toDataURL('image/png');
+    pdf.addImage(img, 'PNG', (pw - w) / 2, (ph - h) / 2, w, h);
     pdf.save((state.name || 'schematic').replace(/[^\w\-]+/g, '_') + '.pdf');
     toast('PDF exported');
   } catch (e) { toast('PDF export needs a connection the first time'); }
