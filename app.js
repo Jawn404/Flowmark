@@ -388,6 +388,32 @@ function drawGrid() {
   ctx.restore();
 }
 
+/* Transform-based grid, clipped to the sheet. Works for any world->device
+   transform T, so the export path can lay the same grid behind the scene. The
+   on-screen drawGrid above stays as-is; this one is used by renderExportCanvas. */
+function drawGridOn(c, T) {
+  const S = T.scale, OX = T.ox, OY = T.oy;
+  if (GRID * S < 6) return;
+  const d = pageDims();
+  const X = w => w * S + OX, Y = h => h * S + OY;
+  const x0 = X(0), y0 = Y(0), x1 = X(d.w), y1 = Y(d.h);
+  c.save();
+  c.beginPath(); c.rect(x0, y0, d.w * S, d.h * S); c.clip();
+  c.lineWidth = 1;
+  c.strokeStyle = '#e8eef4';                       // minor lines
+  c.beginPath();
+  for (let gx = 0; gx <= d.w + .5; gx += GRID) { const px = X(gx); c.moveTo(px, y0); c.lineTo(px, y1); }
+  for (let gy = 0; gy <= d.h + .5; gy += GRID) { const py = Y(gy); c.moveTo(x0, py); c.lineTo(x1, py); }
+  c.stroke();
+  c.strokeStyle = '#d7e0ea';                       // stronger every 5
+  c.beginPath();
+  const big = GRID * 5;
+  for (let gx = 0; gx <= d.w + .5; gx += big) { const px = X(gx); c.moveTo(px, y0); c.lineTo(px, y1); }
+  for (let gy = 0; gy <= d.h + .5; gy += big) { const py = Y(gy); c.moveTo(x0, py); c.lineTo(x1, py); }
+  c.stroke();
+  c.restore();
+}
+
 /* Reusable scene render. T maps world->device-css px. */
 function drawScene(c, T, opts = {}) {
   const S = T.scale, OX = T.ox, OY = T.oy;
@@ -1846,6 +1872,8 @@ function renderExportCanvas(ss = 3, compose = 1) {
   cx.setTransform(ss, 0, 0, ss, 0, 0);                 // uniform supersample for crisp output
   cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, cw, ch);
   const T = { scale: compose, ox: -b.x * compose, oy: -b.y * compose };
+  // Grid background — follows the on-screen Grid toggle, so exports are WYSIWYG.
+  if (showGrid) drawGridOn(cx, T);
   // scene (composed at 100% => WYSIWYG label sizing). Anything off the sheet is
   // naturally clipped by the canvas bounds, matching what the page boundary shows.
   // The branded title-block footer is drawn by drawScene; the legend auto-places
