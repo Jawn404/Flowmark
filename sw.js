@@ -1,5 +1,5 @@
 /* FlowMark service worker — offline-first */
-const VERSION = 'flowmark-v22';
+const VERSION = 'flowmark-v23';
 const SHELL = [
   './',
   './index.html',

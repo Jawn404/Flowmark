@@ -92,6 +92,7 @@
         <button id="toggleGrid" class="active" title="Toggle grid">Grid</button>
         <button id="toggleSnap" class="active" title="Toggle snap to grid">Snap</button>
         <button id="toggleLegend" class="active" title="Toggle legend on drawing">Legend</button>
+        <button id="toggleFooter" class="active" title="Toggle the Ara title-block footer">Footer</button>
         <span class="vc-sep"></span>
         <button id="togglePage" title="A4 page orientation — click to switch between landscape and portrait">Landscape</button>
       </div>
@@ -104,6 +105,7 @@
       <div class="insp-empty" id="inspEmpty">
         <p>Nothing selected.</p>
         <p class="muted">Pick a tool on the left, drop assets onto the grid, then draw pipework between them. Select anything here to edit its label and details.</p>
+        <button class="btn-ghost" id="tbOpen" title="Edit the customer, site and date shown in the page footer">Title block details…</button>
       </div>
       <div id="inspBody" hidden></div>
     </aside>
@@ -139,6 +141,24 @@
   </div>
 </div>
 
+<!-- ===== Title block modal ===== -->
+<div class="modal-backdrop" id="titleModal" hidden>
+  <div class="modal">
+    <header><h2>Title block details</h2><button class="x" id="titleClose">✕</button></header>
+    <div class="modal-body">
+      <div class="import-note">These appear in the branded footer along the foot of the page, and on every PDF and JPG export.</div>
+      <div class="insp-row"><label>Customer name</label><input id="tbCustomer" placeholder="e.g. Acme Manufacturing Ltd"></div>
+      <div class="insp-row"><label>Site address</label><input id="tbSite" placeholder="e.g. 14 Foundry Road, Birmingham B1 2CD"></div>
+      <div class="insp-row"><label>Date</label><input id="tbDate" placeholder="dd/mm/yyyy — leave blank to use today's date"></div>
+    </div>
+    <footer>
+      <span class="grow"></span>
+      <button class="tb" id="titleCancel">Cancel</button>
+      <button class="tb primary" id="titlePlace">Save details</button>
+    </footer>
+  </div>
+</div>
+
 <!-- ===== Bulk labels modal ===== -->
 <div class="modal-backdrop" id="bulkModal" hidden>
   <div class="modal">
@@ -170,6 +190,7 @@ Plant Room"></textarea>
 <div class="sheet-backdrop" id="menuSheet" hidden>
   <div class="sheet">
     <button data-act="install" id="menuInstall">Install app on this device</button>
+    <button data-act="titleblock">Title block details…</button>
     <button data-act="saveas">Save as a new file…</button>
     <button data-act="clear">Clear the canvas</button>
     <button data-act="sample">Load a sample layout</button>
