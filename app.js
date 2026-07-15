@@ -260,18 +260,35 @@ function wrapWords(line, font, maxW) {
    chosen corner or edge-centre so it can be moved clear of schematic content.
    Returns null for unlabelled zones. Used by both the renderer and hit-test so
    the grab band always tracks the drawn tab. */
-const ZONE_TAB_H = 20;          // screen px, constant regardless of zoom
-function zoneLabelRect(z, S) {
+const ZONE_TAB_H = 20;          // screen px per line, constant regardless of zoom
+const ZONE_TAB_PADX = 8;        // screen px of horizontal padding each side
+/* Full tab layout in world units: wraps the label to the zone's own on-screen
+   width so a long name stacks onto extra lines instead of overflowing past the
+   area edge. Returns null for unlabelled zones. Shared by the renderer and the
+   hit-test so the grab band always matches the drawn tab. */
+function zoneLabelLayout(z, S) {
   if (!z.label) return null;
-  _measCtx.font = `700 ${Math.max(11, 13 * Math.min(S, 1.4))}px ${LABEL_FONT_STACK}`;
-  const ww = (_measCtx.measureText(z.label).width + 16) / S;
-  const hh = ZONE_TAB_H / S;
+  const fpx = Math.max(11, 13 * Math.min(S, 1.4));
+  const font = `700 ${fpx}px ${LABEL_FONT_STACK}`;
+  _measCtx.font = font;
+  const maxW = Math.max(40, z.w * S - 2 * ZONE_TAB_PADX);   // wrap to the area's width
+  const lines = [];
+  for (const raw of String(z.label).split(/\r?\n/)) lines.push(...wrapWords(raw, font, maxW));
+  if (!lines.length) lines.push('');
+  let tw = 0;
+  for (const ln of lines) tw = Math.max(tw, _measCtx.measureText(ln).width);
+  const ww = (tw + 2 * ZONE_TAB_PADX) / S;
+  const hh = (lines.length * ZONE_TAB_H) / S;
   const pos = z.labelPos || 'tl';
   let lx = z.x, ly = z.y;
   if (pos === 'tr' || pos === 'br') lx = z.x + z.w - ww;
   else if (pos === 'tc' || pos === 'bc') lx = z.x + (z.w - ww) / 2;
   if (pos[0] === 'b') ly = z.y + z.h - hh;
-  return { x: lx, y: ly, w: ww, h: hh };
+  return { x: lx, y: ly, w: ww, h: hh, lines, font, fpx };
+}
+function zoneLabelRect(z, S) {
+  const L = zoneLabelLayout(z, S);
+  return L ? { x: L.x, y: L.y, w: L.w, h: L.h } : null;
 }
 
 function textLines(t) {
@@ -426,13 +443,14 @@ function drawScene(c, T, opts = {}) {
     c.strokeStyle = '#7c93a8'; c.lineWidth = 1.5; c.setLineDash([6, 5]);
     c.strokeRect(x, y, w, h); c.setLineDash([]);
     if (z.label) {
-      const lr = zoneLabelRect(z, S);
-      const lx = X(lr.x), ly = Y(lr.y), lw = lr.w * S, lh = lr.h * S;
-      c.font = `700 ${Math.max(11, 13 * Math.min(S, 1.4))}px ${LABEL_FONT_STACK}`;
+      const L = zoneLabelLayout(z, S);
+      const lx = X(L.x), ly = Y(L.y), lw = L.w * S, lh = L.h * S;
+      c.font = L.font;
       c.fillStyle = '#475569'; c.globalAlpha = .9;
       c.fillRect(lx, ly, lw, lh); c.globalAlpha = 1;
       c.fillStyle = '#fff'; c.textAlign = 'left'; c.textBaseline = 'middle';
-      c.fillText(z.label, lx + 8, ly + lh / 2 + 1);
+      for (let i = 0; i < L.lines.length; i++)
+        c.fillText(L.lines[i], lx + ZONE_TAB_PADX, ly + i * ZONE_TAB_H + ZONE_TAB_H / 2 + 1);
     }
   }
   // pipes
