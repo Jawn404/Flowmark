@@ -27,6 +27,10 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   far end by default (set them to *None* to remove it). The *Cap* asset also
   works: end a pipe on it and it lines up with the run and takes its colour;
   on its own it can be rotated (`R` or the inspector).
+- **Show flow direction** — select a pipe and set *Flow direction* to
+  *Forward* (from where the run was started to where it ends) or *Reverse*.
+  Small chevrons in the pipe's colour are spaced evenly along the run, follow
+  curves, and appear in PDF/JPG exports.
 - **Curve pipe runs** — while drawing, press, hold and drag instead of
   clicking: the cursor sets the corner the pipe bends round (snaps to the grid,
   so quarter bends are easy). Curves can end on an asset too. Select a pipe and

@@ -568,6 +568,50 @@ function drawPipe(c, p, S, OX, OY) {
   };
   if (caps === 'start' || caps === 'both') bar('start');
   if (caps === 'end' || caps === 'both') bar('end');
+  // flow-direction chevrons along the run, in the pipe's colour
+  if (p.flow === 'fwd' || p.flow === 'rev') {
+    const k = Math.min(S, 1.6), len = 8 * k, half = 4.6 * k;
+    c.fillStyle = cfg.color;
+    for (const a of flowArrows(p, pts)) {
+      const ax = a.x * S + OX, ay = a.y * S + OY, ca = Math.cos(a.ang), sa = Math.sin(a.ang);
+      c.beginPath();
+      c.moveTo(ax + ca * len * .6, ay + sa * len * .6);                                  // tip
+      c.lineTo(ax - ca * len * .4 - sa * half, ay - sa * len * .4 + ca * half);
+      c.lineTo(ax - ca * len * .15, ay - sa * len * .15);                                // notch
+      c.lineTo(ax - ca * len * .4 + sa * half, ay - sa * len * .4 - ca * half);
+      c.closePath(); c.fill();
+    }
+  }
+}
+
+/* ---------- Flow-direction arrows ----------
+   p.flow: 'none' | 'fwd' (start → end, the direction it was drawn) | 'rev'.
+   Arrow positions are spaced evenly in WORLD units along the flattened run
+   (so they follow curves and sit in the same places on screen and in export);
+   only their size uses the usual readability clamp. Returns world points with
+   the travel angle at each. */
+const FLOW_OPTS = [['none', 'Off', 'No flow arrows'], ['fwd', 'Forward', 'Flow from the start of the run (where it was drawn from) to the end'], ['rev', 'Reverse', 'Flow from the end of the run back to the start']];
+const FLOW_SPACING = 80;   // target world distance between arrows
+function flowArrows(p, rp = resolvePipePts(p.pts)) {
+  const poly = flattenPipe(p.pts, rp, 20);
+  const seg = []; let total = 0;
+  for (let i = 1; i < poly.length; i++) {
+    const a = poly[i - 1], b = poly[i], d = Math.hypot(b.x - a.x, b.y - a.y);
+    if (d > 1e-6) { seg.push({ a, b, d, s: total }); total += d; }
+  }
+  if (total < 12) return [];
+  const n = Math.max(1, Math.round(total / FLOW_SPACING));
+  const out = [], rev = p.flow === 'rev';
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    const at = (i + .5) * total / n;
+    while (j < seg.length - 1 && seg[j].s + seg[j].d < at) j++;
+    const g = seg[j], t = (at - g.s) / g.d;
+    let ang = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x);
+    if (rev) ang += Math.PI;
+    out.push({ x: g.a.x + (g.b.x - g.a.x) * t, y: g.a.y + (g.b.y - g.a.y) * t, ang });
+  }
+  return out;
 }
 
 /* ---------- Capped pipe ends ----------
@@ -1629,6 +1673,8 @@ function renderInspector() {
     h += row('Type', `<select class="i-ptype">${Object.entries(PIPES).map(([k, v]) => `<option value="${k}" ${p.type === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>`);
     const pc = pipeCaps(p);
     h += `<div class="insp-row"><label>Capped end</label><div class="cap-row">${CAP_OPTS.map(([k, t]) => `<button type="button" class="${pc === k ? 'sel' : ''}" data-pcap="${k}">${t}</button>`).join('')}</div></div>`;
+    const pf = p.flow || 'none';
+    h += `<div class="insp-row"><label>Flow direction</label><div class="cap-row">${FLOW_OPTS.map(([k, t, tip]) => `<button type="button" class="${pf === k ? 'sel' : ''}" data-pflow="${k}" title="${tip}">${t}</button>`).join('')}</div></div>`;
     const bends = p.pts.filter(hasCurve).length;
     h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">${p.pts.length} points${bends ? ` · ${bends} curve${bends > 1 ? 's' : ''}` : ''}. Drag the square handles to reshape${bends ? ', or the round handles to change a curve' : ''}. Endpoints on an asset (green) follow it when moved.</p>`;
     if (bends) h += `<button type="button" class="btn-sub i-straighten">Straighten curves</button>`;
@@ -1693,6 +1739,7 @@ function wireInspector() {
     set('.i-ptype', 'change', e => { p.type = e.target.value; commit(); renderInspector(); });
     set('.i-straighten', 'click', () => { mutate(() => { for (const pt of p.pts) delete pt.h; }); renderInspector(); });
     $$('[data-pcap]', body).forEach(b => b.addEventListener('click', () => { mutate(() => { p.caps = b.dataset.pcap; }); renderInspector(); }));
+    $$('[data-pflow]', body).forEach(b => b.addEventListener('click', () => { mutate(() => { if (b.dataset.pflow === 'none') delete p.flow; else p.flow = b.dataset.pflow; }); renderInspector(); }));
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id);
     set('.i-zlabel', 'input', e => { z.label = e.target.value; dirty = true; draw(); });
