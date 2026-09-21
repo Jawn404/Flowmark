@@ -144,6 +144,13 @@ button{font-family:inherit;cursor:pointer}
   font-weight:600;font-size:12.5px;color:var(--text-dark);cursor:pointer}
 .cap-row button:hover{border-color:var(--accent)}
 .cap-row button.sel{background:var(--accent);border-color:var(--accent);color:#fff}
+.cap-row button svg{display:block;margin:0 auto}
+/* label formatting toggles — each glyph previews its own style */
+.fmt-row button{font-size:14px;font-weight:500;font-family:Georgia,'Times New Roman',serif}
+.fmt-row .fmt-bold{font-weight:800}
+.fmt-row .fmt-italic{font-style:italic}
+.fmt-row .fmt-underline{text-decoration:underline}
+.fmt-row .fmt-strike{text-decoration:line-through}
 .rot-row{display:flex;gap:6px;align-items:center}
 .rot-row .i-rot-btn{flex:0 0 auto;border:1px solid var(--panel-line);background:#fff;border-radius:6px;
   padding:7px 10px;font-size:12.5px;font-weight:600;color:var(--text-dark);cursor:pointer;white-space:nowrap}

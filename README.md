@@ -41,6 +41,11 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   workshop, office, plant room, etc.).
 - **Inspect & label** every asset — tag, volume, size, location, risk rating
   (A–E) and notes — via the side panel.
+- **Format text labels** — select a label and use the *Format* buttons for
+  **bold**, *italic*, underline and strikethrough (or Ctrl/⌘+B / I / U,
+  Ctrl/⌘+Shift+X), align left / centre / right, pick a text colour, and add a
+  highlight box so labels stay readable over pipework. Select several labels
+  to format them all at once.
 - **Export** the finished schematic to **PDF** (A4 landscape) or **JPG**.
 - **Import a Legionella report PDF** and have it suggest the on-site assets it
   finds, which you review and place on the canvas, then reposition freely.

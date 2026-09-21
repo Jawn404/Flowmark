@@ -179,6 +179,12 @@ function flattenPipe(descr, rp = resolvePipePts(descr), steps = 14) {
    single-line labels render exactly where they always did. */
 const LABEL_FONT_STACK = 'Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const labelFont = px => `${px}px ${LABEL_FONT_STACK}`;
+/* Per-label font: honours the label's bold / italic formatting flags. Used by
+   layout, measuring and drawing alike so wrap points and hit boxes match. */
+const textFont = (t, px) => `${t.italic ? 'italic ' : ''}${t.bold ? 700 : 400} ${px}px ${LABEL_FONT_STACK}`;
+const TEXT_COLORS = ['#1f2c3a', '#000000', '#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#ffffff'];
+const TEXT_BGS = ['', '#ffffff', '#fef08a', '#dbeafe', '#dcfce7', '#fee2e2'];
+const TEXT_FMT = [['bold', 'B', 'Bold (Ctrl+B)'], ['italic', 'I', 'Italic (Ctrl+I)'], ['underline', 'U', 'Underline (Ctrl+U)'], ['strike', 'S', 'Strikethrough (Ctrl+Shift+X)']];
 
 /* ============================================================
    ARA BRANDING — title-block footer
@@ -340,7 +346,7 @@ function textLines(t) {
   const raw = String(t.text == null ? '' : t.text).split(/\r?\n/);
   const wrap = +t.wrap || 0;
   if (!wrap) return raw.length ? raw : [''];
-  const font = labelFont(t.size || 14);
+  const font = textFont(t, t.size || 14);
   const out = [];
   for (const ln of raw) out.push(...wrapWords(ln, font, wrap));
   return out.length ? out : [''];
@@ -349,7 +355,7 @@ function textLines(t) {
 function textBlock(t) {
   const size = t.size || 14;
   const lines = textLines(t);
-  _measCtx.font = labelFont(size);
+  _measCtx.font = textFont(t, size);
   let maxW = 0;
   for (const ln of lines) maxW = Math.max(maxW, _measCtx.measureText(ln).width);
   const lineH = size * 1.3;
@@ -360,15 +366,25 @@ function drawText(c, t, S, X, Y) {
   const fs = size * Math.min(S, 1.6);   // same readability cap used by other labels
   const lh = fs * 1.3;
   const lines = textLines(t);
-  c.font = labelFont(fs);
+  c.font = textFont(t, fs);
   c.textAlign = 'left'; c.textBaseline = 'alphabetic';
-  c.fillStyle = t.color || '#1f2c3a';
   const bx = X(t.x), by = Y(t.y);
-  if (t.align === 'center') {
-    let maxW = 0; const widths = lines.map(ln => { const w = c.measureText(ln).width; if (w > maxW) maxW = w; return w; });
-    for (let i = 0; i < lines.length; i++) c.fillText(lines[i], bx + (maxW - widths[i]) / 2, by + i * lh);
-  } else {
-    for (let i = 0; i < lines.length; i++) c.fillText(lines[i], bx, by + i * lh);
+  let maxW = 0; const widths = lines.map(ln => { const w = c.measureText(ln).width; if (w > maxW) maxW = w; return w; });
+  // optional highlight box behind the whole block
+  if (t.bg) {
+    const pad = fs * 0.25;
+    c.fillStyle = t.bg;
+    c.fillRect(bx - pad, by - fs * 0.82 - pad, maxW + pad * 2, (lines.length - 1) * lh + fs + pad * 2);
+  }
+  c.fillStyle = t.color || '#1f2c3a';
+  const lw = Math.max(1, fs / 15);
+  for (let i = 0; i < lines.length; i++) {
+    const off = t.align === 'center' ? (maxW - widths[i]) / 2 : t.align === 'right' ? maxW - widths[i] : 0;
+    const x = bx + off, y = by + i * lh;
+    c.fillText(lines[i], x, y);
+    if (!widths[i]) continue;
+    if (t.underline) c.fillRect(x, y + fs * 0.12, widths[i], lw);
+    if (t.strike) c.fillRect(x, y - fs * 0.3 - lw / 2, widths[i], lw);
   }
 }
 
@@ -1638,11 +1654,13 @@ function renderInspector() {
     const movable = alignableUnits().length;
     body.innerHTML = `<div class="insp-head"><span class="badge">×${total}</span><h3>${total > 1 ? 'Multiple items' : 'Selection'}</h3></div>`
       + `<p class="muted" style="font-size:12px;margin:4px 0 10px">${parts}.<br>Drag any selected item to move them together — boxed pipe points move while the rest of each run stays put. Shift-click to add or remove. Delete removes the selected items and points.</p>`
+      + (counts.text ? textFmtRow(formattableTexts()) : '')
       + (movable >= 2 ? alignSection(movable) : '')
       + `<button class="btn-del" data-delgroup>Delete ${total} item${total > 1 ? 's' : ''}</button>`;
     const d = $('[data-delgroup]', body); if (d) d.addEventListener('click', deleteSelected);
     $$('[data-align]', body).forEach(b => b.addEventListener('click', () => alignSelection(b.dataset.align)));
     $$('[data-dist]', body).forEach(b => b.addEventListener('click', () => distributeSelection(b.dataset.dist)));
+    $$('[data-tfmt]', body).forEach(b => b.addEventListener('click', () => toggleTextFmt(b.dataset.tfmt)));
     return;
   }
   if (!sel) { empty.hidden = false; body.hidden = true; return; }
@@ -1701,13 +1719,53 @@ function renderInspector() {
     const t = state.texts.find(t => t.id === sel.id); if (!t) return select(null);
     h += `<div class="insp-head"><span class="badge">TEXT</span><h3>Label</h3></div>`;
     h += row('Text', `<textarea class="i-text" rows="3" placeholder="Room name — press Enter for a new line">${esc(t.text)}</textarea>`);
-    h += row('Alignment', `<select class="i-talign"><option value="left" ${t.align !== 'center' ? 'selected' : ''}>Left</option><option value="center" ${t.align === 'center' ? 'selected' : ''}>Centre</option></select>`);
+    h += textFmtRow([t]);
+    const al = t.align || 'left';
+    h += `<div class="insp-row"><label>Alignment</label><div class="cap-row">${TEXT_ALIGN.map(([k, tip]) => `<button type="button" class="${al === k ? 'sel' : ''}" data-talign="${k}" title="${tip}">${TEXT_ALIGN_ICONS[k]}</button>`).join('')}</div></div>`;
+    h += `<div class="insp-row"><label>Text colour</label><div class="swatch-row">${TEXT_COLORS.map(c => `<div class="swatch ${(t.color || TEXT_COLORS[0]) === c ? 'sel' : ''}" data-tcol="${c}" title="${c}" style="background:${c}${c === '#ffffff' ? ';border-color:var(--panel-line)' : ''}"></div>`).join('')}</div></div>`;
+    h += `<div class="insp-row"><label>Highlight</label><div class="swatch-row">${TEXT_BGS.map(c => `<div class="swatch ${c ? '' : 'none'} ${(t.bg || '') === c ? 'sel' : ''}" data-tbg="${c}" title="${c || 'No highlight'}" style="${c ? `background:${c}${c === '#ffffff' ? ';border-color:var(--panel-line)' : ''}` : ''}"></div>`).join('')}</div></div>`;
     h += row('Wrap width (0 = off)', `<input class="i-twrap" type="number" min="0" step="10" value="${t.wrap || 0}" placeholder="e.g. 140">`);
     h += row('Size', `<input class="i-tsize" type="number" value="${t.size || 14}" min="8" max="48">`);
     h += `<button class="btn-del" data-del>Delete label</button>`;
   }
   body.innerHTML = h;
   wireInspector();
+}
+/* Label formatting. The B / I / U / S row accepts one or many labels (the
+   multi-select inspector passes every selected label); a button shows as on
+   only when all of them have that format. */
+const TEXT_ALIGN = [['left', 'Align left'], ['center', 'Centre'], ['right', 'Align right']];
+const TEXT_ALIGN_ICONS = {
+  left:   `<svg viewBox="0 0 24 24" width="18" height="18"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="10" x2="14" y2="10"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="4" y1="18" x2="12" y2="18"/></g></svg>`,
+  center: `<svg viewBox="0 0 24 24" width="18" height="18"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="10" x2="17" y2="10"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="8" y1="18" x2="16" y2="18"/></g></svg>`,
+  right:  `<svg viewBox="0 0 24 24" width="18" height="18"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="10" y1="10" x2="20" y2="10"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="12" y1="18" x2="20" y2="18"/></g></svg>`,
+};
+function textFmtRow(ts) {
+  return `<div class="insp-row"><label>Format</label><div class="cap-row fmt-row">${TEXT_FMT.map(([k, g, tip]) =>
+    `<button type="button" class="fmt-${k} ${ts.length && ts.every(t => t[k]) ? 'sel' : ''}" data-tfmt="${k}" title="${tip}">${g}</button>`).join('')}</div></div>`;
+}
+/* Labels the formatting buttons / shortcuts act on: the selected label, or
+   every label in a multi-selection. */
+function formattableTexts() {
+  if (group.length) return group.filter(r => r.kind === 'text').map(r => state.texts.find(t => t.id === r.id)).filter(Boolean);
+  if (sel && sel.kind === 'text') { const t = state.texts.find(t => t.id === sel.id); return t ? [t] : []; }
+  return [];
+}
+/* Toggle a format flag: if every target already has it, clear it; otherwise
+   switch it on for all. Undoable. */
+function toggleTextFmt(key) {
+  const ts = formattableTexts(); if (!ts.length) return false;
+  const on = !ts.every(t => t[key]);
+  mutate(() => { for (const t of ts) { if (on) t[key] = true; else delete t[key]; } });
+  renderInspector();
+  return true;
+}
+/* Ctrl/⌘+B / I / U and Ctrl/⌘+Shift+X → format key, else null. */
+function fmtKeyFor(e) {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
+  const k = e.key.toLowerCase();
+  if (e.shiftKey) return k === 'x' ? 'strike' : null;
+  return ({ b: 'bold', i: 'italic', u: 'underline' })[k] || null;
 }
 function row(label, inner, cls = '') { return `<div class="insp-row ${cls}"><label>${label}</label>${inner}</div>`; }
 function riskRow(cur) {
@@ -1762,7 +1820,19 @@ function wireInspector() {
   } else if (sel.kind === 'text') {
     const t = state.texts.find(t => t.id === sel.id);
     set('.i-text', 'input', e => { t.text = e.target.value; dirty = true; draw(); });
-    set('.i-talign', 'change', e => { t.align = e.target.value; commit(); });
+    $$('[data-tfmt]', body).forEach(b => b.addEventListener('click', () => toggleTextFmt(b.dataset.tfmt)));
+    $$('[data-talign]', body).forEach(b => b.addEventListener('click', () => { mutate(() => { if (b.dataset.talign === 'left') delete t.align; else t.align = b.dataset.talign; }); renderInspector(); }));
+    $$('[data-tcol]', body).forEach(b => b.addEventListener('click', () => { mutate(() => { if (b.dataset.tcol === TEXT_COLORS[0]) delete t.color; else t.color = b.dataset.tcol; }); renderInspector(); }));
+    $$('[data-tbg]', body).forEach(b => b.addEventListener('click', () => { mutate(() => { if (!b.dataset.tbg) delete t.bg; else t.bg = b.dataset.tbg; }); renderInspector(); }));
+    // formatting shortcuts also work while typing in the text box; the caret
+    // is restored after the inspector re-renders
+    set('.i-text', 'keydown', e => {
+      const k = fmtKeyFor(e); if (!k) return;
+      e.preventDefault();
+      const a = e.target.selectionStart, b = e.target.selectionEnd;
+      toggleTextFmt(k);
+      const ta = $('.i-text', $('#inspBody')); if (ta) { ta.focus(); ta.setSelectionRange(a, b); }
+    });
     set('.i-twrap', 'input', e => { t.wrap = Math.max(0, +e.target.value || 0); dirty = true; draw(); });
     set('.i-tsize', 'input', e => { t.size = +e.target.value || 14; dirty = true; draw(); });
   }
@@ -2596,7 +2666,7 @@ $('#menuSheet').addEventListener('click', e => {
   else if (act === 'titleblock') openTitleModal();
   else if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Curved pipe: while drawing, press, hold and drag — the cursor sets the corner the pipe bends round. Select a pipe and drag its round handle to adjust a curve.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Curved pipe: while drawing, press, hold and drag — the cursor sets the corner the pipe bends round. Select a pipe and drag its round handle to adjust a curve.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo · With a label selected: Ctrl/⌘+B bold · Ctrl/⌘+I italic · Ctrl/⌘+U underline · Ctrl/⌘+Shift+X strikethrough.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -2617,6 +2687,7 @@ window.addEventListener('keydown', e => {
     if (draft) cancelDraft(); else select(null);
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && (sel || group.length)) { e.preventDefault(); deleteSelected(); }
+  { const k = fmtKeyFor(e); if (k && formattableTexts().length) { e.preventDefault(); toggleTextFmt(k); return; } }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelection(); }
