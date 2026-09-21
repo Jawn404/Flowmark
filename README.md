@@ -21,6 +21,12 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   - Hot – flow (solid red)
   - Hot – return (dashed red)
   - Dead-leg (dash-dot amber, with an end-cap marker)
+- **Cap off any pipe run** — select a pipe and set *Capped end* to Start, End or
+  Both. The blanking bar is drawn in the pipe's own colour, so a capped hot leg
+  still reads as hot and a capped cold leg as cold. Deadlegs are capped at the
+  far end by default (set them to *None* to remove it). The *Cap* asset also
+  works: end a pipe on it and it lines up with the run and takes its colour;
+  on its own it can be rotated (`R` or the inspector).
 - **Curve pipe runs** — while drawing, press, hold and drag instead of
   clicking: the cursor sets the corner the pipe bends round (snaps to the grid,
   so quarter bends are easy). Curves can end on an asset too. Select a pipe and
@@ -125,7 +131,7 @@ install FlowMark. Every push to `main` redeploys automatically.
 | `P` | Pipe |
 | `Z` | Zone |
 | `T` | Text |
-| `R` | Rectangle (rotates a selected pump instead) |
+| `R` | Rectangle (rotates a selected pump or free-standing cap instead) |
 | `E` | Ellipse |
 | `Del` | Delete selected |
 | `Ctrl/⌘ + Z` | Undo |

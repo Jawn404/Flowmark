@@ -139,6 +139,11 @@ button{font-family:inherit;cursor:pointer}
 .risk-row button{flex:1;border:1px solid var(--panel-line);background:#fff;border-radius:6px;padding:7px 0;
   font-weight:700;font-size:13px;color:var(--text-dark)}
 .risk-row button.sel{color:#fff}
+.cap-row{display:flex;gap:5px}
+.cap-row button{flex:1;border:1px solid var(--panel-line);background:#fff;border-radius:6px;padding:7px 0;
+  font-weight:600;font-size:12.5px;color:var(--text-dark);cursor:pointer}
+.cap-row button:hover{border-color:var(--accent)}
+.cap-row button.sel{background:var(--accent);border-color:var(--accent);color:#fff}
 .rot-row{display:flex;gap:6px;align-items:center}
 .rot-row .i-rot-btn{flex:0 0 auto;border:1px solid var(--panel-line);background:#fff;border-radius:6px;
   padding:7px 10px;font-size:12.5px;font-weight:600;color:var(--text-dark);cursor:pointer;white-space:nowrap}

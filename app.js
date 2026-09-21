@@ -553,19 +553,63 @@ function drawPipe(c, p, S, OX, OY) {
   c.lineJoin = 'round'; c.lineCap = 'round';
   c.setLineDash(cfg.dash.map(d => d * Math.max(.8, Math.min(S, 1.4))));
   c.stroke(); c.setLineDash([]);
-  // deadleg end cap marker
-  if (p.type === 'deadleg') {
-    const e = pts[pts.length - 1], last = p.pts[p.pts.length - 1];
-    // on a curved final segment the cap sits square to the arrival tangent
-    let b = pts[pts.length - 2];
-    if (hasCurve(last)) { const q = curveCtrl(last); if (q.x !== e.x || q.y !== e.y) b = q; }
+  // capped / blanked ends — a bar square to the run, in the pipe's own colour
+  // (always solid, even on dashed runs) so a capped hot leg still reads as hot.
+  const caps = pipeCaps(p);
+  const bar = which => {
+    const { e, b } = pipeEndDir(p, pts, which);
     const ang = Math.atan2(e.y - b.y, e.x - b.x) + Math.PI / 2;
     const ex = e.x * S + OX, ey = e.y * S + OY, len = 6 * Math.min(S, 1.6);
     c.beginPath();
     c.moveTo(ex + Math.cos(ang) * len, ey + Math.sin(ang) * len);
     c.lineTo(ex - Math.cos(ang) * len, ey - Math.sin(ang) * len);
-    c.strokeStyle = cfg.color; c.lineWidth = cfg.width * Math.min(S, 1.4); c.stroke();
+    c.strokeStyle = cfg.color; c.lineWidth = Math.max(cfg.width, 2.4) * Math.min(S, 1.4);
+    c.lineCap = 'butt'; c.stroke(); c.lineCap = 'round';
+  };
+  if (caps === 'start' || caps === 'both') bar('start');
+  if (caps === 'end' || caps === 'both') bar('end');
+}
+
+/* ---------- Capped pipe ends ----------
+   p.caps: 'none' | 'start' | 'end' | 'both'. Unset means the historical
+   default — deadlegs capped at their far end, everything else open — so older
+   files render exactly as before. */
+const CAP_OPTS = [['none', 'None'], ['start', 'Start'], ['end', 'End'], ['both', 'Both']];
+function pipeCaps(p) { return p.caps || (p.type === 'deadleg' ? 'end' : 'none'); }
+/* End point e and the point b the run arrives from (world). On a curved end
+   segment b is the bend's control point, so the cap sits square to the tangent. */
+function pipeEndDir(p, rp, which) {
+  if (which === 'start') {
+    const e = rp[0], nxt = p.pts[1];
+    let b = rp[1];
+    if (hasCurve(nxt)) { const q = curveCtrl(nxt); if (q.x !== e.x || q.y !== e.y) b = q; }
+    return { e, b };
   }
+  const e = rp[rp.length - 1], last = p.pts[p.pts.length - 1];
+  let b = rp[rp.length - 2];
+  if (hasCurve(last)) { const q = curveCtrl(last); if (q.x !== e.x || q.y !== e.y) b = q; }
+  return { e, b };
+}
+/* A cap asset with a pipe ending on it lines up with that pipe and takes its
+   colour; a free-standing cap uses its own rotation (n.rot, 0 = pipe enters
+   from the left) and draws in black. */
+function capPipe(n) {
+  for (const p of state.pipes) {
+    if (p.pts.length < 2) continue;
+    if (p.pts[p.pts.length - 1].node === n.id) return { p, which: 'end' };
+    if (p.pts[0].node === n.id) return { p, which: 'start' };
+  }
+  return null;
+}
+function capLook(n) {
+  const hit = capPipe(n);
+  if (hit) {
+    const rp = resolvePipePts(hit.p.pts);
+    const { e, b } = pipeEndDir(hit.p, rp, hit.which);
+    if (e.x !== b.x || e.y !== b.y)
+      return { ang: Math.atan2(e.y - b.y, e.x - b.x), color: (PIPES[hit.p.type] || PIPES.coldMains).color, linked: true };
+  }
+  return { ang: (n.rot || 0) * Math.PI / 180, color: '#000000', linked: false };
 }
 
 function drawNode(c, n, S, OX, OY) {
@@ -718,9 +762,13 @@ function drawNode(c, n, S, OX, OY) {
       break;
     }
     case 'cap': {
-      c.strokeStyle = '#000000'; c.lineWidth = 2.4;
-      c.beginPath(); c.moveTo(cx - w * .4, cy); c.lineTo(cx + w * .15, cy); c.stroke();
-      c.beginPath(); c.moveTo(cx + w * .15, cy - h * .35); c.lineTo(cx + w * .15, cy + h * .35); c.stroke();
+      const look = capLook(n);
+      c.save();
+      c.translate(cx, cy); c.rotate(look.ang);
+      c.strokeStyle = look.color; c.lineWidth = 2.4; c.lineCap = 'butt';
+      c.beginPath(); c.moveTo(-w * .5, 0); c.lineTo(w * .15, 0); c.stroke();
+      c.beginPath(); c.moveTo(w * .15, -h * .35); c.lineTo(w * .15, h * .35); c.stroke();
+      c.restore();
       break;
     }
   }
@@ -1563,6 +1611,10 @@ function renderInspector() {
     h += row('Label', `<input class="i-label" value="${esc(n.label)}">`, 'mono');
     if (n.type === 'pump')
       h += row('Flow direction', `<div class="rot-row"><button type="button" class="i-rot-btn" title="Rotate 90°">⟳ 90°</button><input class="i-rot" type="number" value="${n.rot || 0}" step="15" min="0" max="359"><span class="rot-unit">°</span></div>`);
+    if (n.type === 'cap') {
+      if (capPipe(n)) h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">Lined up with the pipe ending on it, and drawn in that pipe's colour.</p>`;
+      else h += row('Rotation', `<div class="rot-row"><button type="button" class="i-rot-btn" title="Rotate 90°">⟳ 90°</button><input class="i-rot" type="number" value="${n.rot || 0}" step="15" min="0" max="359"><span class="rot-unit">°</span></div>`);
+    }
     if (a.fields.includes('volume'))
       h += row('Volume (litres)', `<input class="i-vol" type="number" value="${n.props.volume || ''}" placeholder="e.g. 240">`);
     if (n.type === 'tank' || n.type === 'heater')
@@ -1575,6 +1627,8 @@ function renderInspector() {
     const p = state.pipes.find(p => p.id === sel.id); if (!p) return select(null);
     h += `<div class="insp-head"><span class="badge" style="background:${PIPES[p.type].color}">PIPE</span><h3>Pipework</h3></div>`;
     h += row('Type', `<select class="i-ptype">${Object.entries(PIPES).map(([k, v]) => `<option value="${k}" ${p.type === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>`);
+    const pc = pipeCaps(p);
+    h += `<div class="insp-row"><label>Capped end</label><div class="cap-row">${CAP_OPTS.map(([k, t]) => `<button type="button" class="${pc === k ? 'sel' : ''}" data-pcap="${k}">${t}</button>`).join('')}</div></div>`;
     const bends = p.pts.filter(hasCurve).length;
     h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">${p.pts.length} points${bends ? ` · ${bends} curve${bends > 1 ? 's' : ''}` : ''}. Drag the square handles to reshape${bends ? ', or the round handles to change a curve' : ''}. Endpoints on an asset (green) follow it when moved.</p>`;
     if (bends) h += `<button type="button" class="btn-sub i-straighten">Straighten curves</button>`;
@@ -1638,6 +1692,7 @@ function wireInspector() {
     const p = state.pipes.find(p => p.id === sel.id);
     set('.i-ptype', 'change', e => { p.type = e.target.value; commit(); renderInspector(); });
     set('.i-straighten', 'click', () => { mutate(() => { for (const pt of p.pts) delete pt.h; }); renderInspector(); });
+    $$('[data-pcap]', body).forEach(b => b.addEventListener('click', () => { mutate(() => { p.caps = b.dataset.pcap; }); renderInspector(); }));
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id);
     set('.i-zlabel', 'input', e => { z.label = e.target.value; dirty = true; draw(); });
@@ -2542,7 +2597,7 @@ window.addEventListener('keydown', e => {
     const k = e.key.toLowerCase();
     if (k === 'r' && sel && sel.kind === 'node') {
       const n = nodeById(sel.id);
-      if (n && n.type === 'pump') { e.preventDefault(); rotateNode(n, 90); return; }
+      if (n && (n.type === 'pump' || (n.type === 'cap' && !capPipe(n)))) { e.preventDefault(); rotateNode(n, 90); return; }
     }
     if (k === 'v') setTool('select'); else if (k === 'h') setTool('pan');
     else if (k === 'p') setTool('pipe', { pipe: pipeKind }); else if (k === 'z') setTool('zone');
