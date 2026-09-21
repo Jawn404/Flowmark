@@ -89,6 +89,10 @@ button{font-family:inherit;cursor:pointer}
 .hot-flow::after{border-top:2.5px solid var(--hot)}
 .hot-return::after{border-top:2.5px dashed var(--hot)}
 .deadleg::after{border-top:3px solid var(--deadleg)}
+/* shape tool icons */
+.tool .ico.shape-ico{width:24px;height:16px;border:2px solid currentColor;box-sizing:border-box;margin:2px 0}
+.tool .ico.shape-ico.rect{border-radius:1px}
+.tool .ico.shape-ico.ellipse{border-radius:50%}
 
 /* ---------- Stage / canvas ---------- */
 #stage{position:relative;flex:1;min-width:0;background:var(--desk);overflow:hidden;touch-action:none}
@@ -125,6 +129,12 @@ button{font-family:inherit;cursor:pointer}
 .swatch-row{display:flex;gap:6px;flex-wrap:wrap}
 .swatch{width:26px;height:26px;border-radius:6px;border:2px solid transparent;cursor:pointer}
 .swatch.sel{border-color:var(--text-dark);box-shadow:0 0 0 2px #fff inset}
+/* "no fill" swatch: white tile with a red diagonal strike */
+.swatch.none{background:#fff linear-gradient(to top right,transparent calc(50% - 1px),#dc2626 calc(50% - 1px),#dc2626 calc(50% + 1px),transparent calc(50% + 1px));border-color:var(--panel-line)}
+.swatch.none.sel{border-color:var(--text-dark)}
+.size-row{display:flex;gap:6px;align-items:center}
+.size-row input{flex:1;min-width:0}
+.size-row span{color:var(--muted);font-size:13px}
 .risk-row{display:flex;gap:5px}
 .risk-row button{flex:1;border:1px solid var(--panel-line);background:#fff;border-radius:6px;padding:7px 0;
   font-weight:700;font-size:13px;color:var(--text-dark)}

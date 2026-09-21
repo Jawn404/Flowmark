@@ -42,17 +42,26 @@ const PIPES = {
 };
 const RISK = { A: '#16a34a', B: '#65a30d', C: '#d97706', D: '#ea580c', E: '#dc2626' };
 const ZONE_COLORS = ['#e0f2fe', '#dcfce7', '#fef9c3', '#fae8ff', '#ffedd5', '#e2e8f0'];
+/* Simple drawn shapes (rectangles / ellipses). Box geometry matches zones:
+   x, y = top-left corner, w, h = size, all world units. Style is per shape. */
+const SHAPE_NAMES = { rect: 'Rectangle', ellipse: 'Ellipse' };
+const SHAPE_DEFAULTS = { stroke: '#33485f', fill: '', lw: 2, dash: false };
+const SHAPE_STROKES = ['#33485f', '#000000', '#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed'];
+const SHAPE_FILLS = ['', '#ffffff', '#e0f2fe', '#dcfce7', '#fef9c3', '#fee2e2', '#e2e8f0'];
+const SHAPE_WEIGHTS = [[1, 'Thin'], [2, 'Medium'], [3.5, 'Thick']];
 
 /* ---------- State ---------- */
 let state = blankState();
 function blankState() {
-  return { name: 'Untitled schematic', page: { orientation: 'landscape' }, meta: { customer: '', site: '', date: '' }, zones: [], nodes: [], pipes: [], texts: [] };
+  return { name: 'Untitled schematic', page: { orientation: 'landscape' }, meta: { customer: '', site: '', date: '' }, zones: [], shapes: [], nodes: [], pipes: [], texts: [] };
 }
 let view = { scale: 1, ox: 0, oy: 0 };
 let tool = 'select';
 let pipeKind = 'coldMains';
 let assetKind = 'tank';
-let sel = null;               // {kind:'node'|'pipe'|'zone'|'text', id}  — single selection (drives inspector)
+let shapeKind = 'rect';
+let shapeStyle = { ...SHAPE_DEFAULTS };   // style for new shapes — follows the last shape edited
+let sel = null;               // {kind:'node'|'pipe'|'zone'|'shape'|'text', id}  — single selection (drives inspector)
 let group = [];               // multi-selection: array of {kind,id}. When >1, sel is null.
 let draft = null;             // pipe being drawn
 let ortho = true;             // right-angle pipe mode
@@ -453,6 +462,8 @@ function drawScene(c, T, opts = {}) {
         c.fillText(L.lines[i], lx + ZONE_TAB_PADX, ly + i * ZONE_TAB_H + ZONE_TAB_H / 2 + 1);
     }
   }
+  // shapes (above zones, beneath pipework and assets)
+  for (const sh of state.shapes) drawShape(c, sh, S, X, Y);
   // pipes
   for (const p of state.pipes) drawPipe(c, p, S, OX, OY);
   // nodes
@@ -471,6 +482,28 @@ function drawScene(c, T, opts = {}) {
     const [lx, ly] = placeLegend(c, T, frame, opts.legendMargin ?? 14, legendExtra);
     drawLegend(c, lx, ly);
   }
+}
+
+/* Rectangle / ellipse. Line width and dash use the same readability clamp as
+   pipework, so shapes read identically on screen and in exports. */
+function shapePath(c, sh, x, y, w, h) {
+  c.beginPath();
+  if (sh.type === 'ellipse') c.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  else c.rect(x, y, w, h);
+}
+function drawShape(c, sh, S, X, Y) {
+  const x = X(sh.x), y = Y(sh.y), w = sh.w * S, h = sh.h * S;
+  const k = Math.max(.8, Math.min(S, 1.6));
+  c.save();
+  shapePath(c, sh, x, y, w, h);
+  if (sh.fill) { c.fillStyle = sh.fill; c.fill(); }
+  c.strokeStyle = sh.stroke || SHAPE_DEFAULTS.stroke;
+  c.lineWidth = (sh.lw || SHAPE_DEFAULTS.lw) * k;
+  c.lineJoin = 'miter';
+  const dk = Math.max(.8, Math.min(S, 1.4));
+  c.setLineDash(sh.dash ? [7 * dk, 5 * dk] : []);
+  c.stroke();
+  c.restore();
 }
 
 function drawPipe(c, p, S, OX, OY) {
@@ -712,6 +745,7 @@ function contentObstacles(T) {
   const rects = [];
   for (const n of state.nodes) rects.push({ x: X(n.x - n.w / 2), y: Y(n.y - n.h / 2), w: n.w * S, h: n.h * S });
   for (const z of state.zones) rects.push({ x: X(z.x), y: Y(z.y), w: z.w * S, h: z.h * S });
+  for (const sh of state.shapes) rects.push({ x: X(sh.x), y: Y(sh.y), w: sh.w * S, h: sh.h * S });
   for (const t of state.texts) { const m = textBlock(t); rects.push({ x: X(t.x), y: Y(t.y - m.ascent), w: m.w * S, h: m.h * S }); }
   for (const p of state.pipes) {
     const rp = resolvePipePts(p.pts);
@@ -791,6 +825,12 @@ function outlineRef(ref, multi) {
     ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1.5;
     if (multi) { ctx.setLineDash([4, 3]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]); }
     else { ctx.strokeRect(x, y, w, h); for (const [hx, hy] of zoneHandles(z)) handle(sx(hx), sy(hy), '#0aa6c4'); }
+  } else if (ref.kind === 'shape') {
+    const sh = shapeById(ref.id); if (!sh) return;
+    const x = sx(sh.x), y = sy(sh.y), w = sh.w * view.scale, h = sh.h * view.scale;
+    ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+    ctx.strokeRect(x - 3, y - 3, w + 6, h + 6); ctx.setLineDash([]);
+    if (!multi) for (const [hx, hy] of zoneHandles(sh)) handle(sx(hx), sy(hy), '#0aa6c4');
   } else if (ref.kind === 'text') {
     const t = state.texts.find(t => t.id === ref.id); if (!t) return;
     if (multi) {
@@ -856,6 +896,27 @@ function hitText(wpt) {
     const top = t.y - m.ascent;
     if (wpt.x >= t.x - 4 && wpt.x <= t.x + m.w + 4 && wpt.y >= top - 4 && wpt.y <= top + m.h + 4) return t;
   }
+  return null;
+}
+const shapeById = id => state.shapes.find(s => s.id === id);
+/* Outline-only shapes are grabbed on their stroke, so clicks inside them still
+   reach whatever sits underneath; filled shapes are grabbed anywhere inside. */
+function shapeContains(sh, wpt, tol) {
+  if (sh.type === 'ellipse') {
+    const rx = Math.max(1e-6, sh.w / 2), ry = Math.max(1e-6, sh.h / 2);
+    const d = Math.hypot((wpt.x - (sh.x + rx)) / rx, (wpt.y - (sh.y + ry)) / ry);
+    if (sh.fill && d <= 1) return true;
+    return Math.abs(d - 1) * Math.min(rx, ry) <= tol;
+  }
+  const inOuter = wpt.x >= sh.x - tol && wpt.x <= sh.x + sh.w + tol && wpt.y >= sh.y - tol && wpt.y <= sh.y + sh.h + tol;
+  if (!inOuter) return false;
+  if (sh.fill) return true;
+  const inInner = wpt.x > sh.x + tol && wpt.x < sh.x + sh.w - tol && wpt.y > sh.y + tol && wpt.y < sh.y + sh.h - tol;
+  return !inInner;
+}
+function hitShape(wpt) {
+  const tol = 6 / view.scale;
+  for (let i = state.shapes.length - 1; i >= 0; i--) if (shapeContains(state.shapes[i], wpt, tol)) return state.shapes[i];
   return null;
 }
 function hitZoneHandle(z, wpt) {
@@ -930,6 +991,13 @@ function collectInMarquee(r) {
     const tb = { x1: t.x, y1: t.y - m.ascent, x2: t.x + m.w, y2: t.y - m.ascent + m.h };
     if (rectsOverlap(r, tb)) g.push({ kind: 'text', id: t.id });
   }
+  for (const sh of state.shapes) {
+    if (!rectsOverlap(r, { x1: sh.x, y1: sh.y, x2: sh.x + sh.w, y2: sh.y + sh.h })) continue;
+    // a box drawn wholly inside an outline-only shape shouldn't sweep up the outline
+    const inside = r.x1 > sh.x && r.x2 < sh.x + sh.w && r.y1 > sh.y && r.y2 < sh.y + sh.h;
+    if (inside && !sh.fill) continue;
+    g.push({ kind: 'shape', id: sh.id });
+  }
   for (const z of state.zones) {
     if (r.x1 <= z.x && r.x2 >= z.x + z.w && r.y1 <= z.y && r.y2 >= z.y + z.h) g.push({ kind: 'zone', id: z.id });
   }
@@ -939,6 +1007,7 @@ function hitAny(w) {
   const n = hitNode(w); if (n) return { kind: 'node', id: n.id };
   const p = hitPipe(w); if (p) return { kind: 'pipe', id: p.id };
   const t = hitText(w); if (t) return { kind: 'text', id: t.id };
+  const sh = hitShape(w); if (sh) return { kind: 'shape', id: sh.id };
   const z = hitZoneLabel(w); if (z) return { kind: 'zone', id: z.id };
   return null;
 }
@@ -981,6 +1050,7 @@ function startGroupDrag(w) {
     if (ref.kind === 'node') { const n = nodeById(ref.id); return n && { kind: 'node', id: ref.id, x: n.x, y: n.y }; }
     if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); return t && { kind: 'text', id: ref.id, x: t.x, y: t.y }; }
     if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); return z && { kind: 'zone', id: ref.id, x: z.x, y: z.y }; }
+    if (ref.kind === 'shape') { const sh = shapeById(ref.id); return sh && { kind: 'shape', id: ref.id, x: sh.x, y: sh.y }; }
     if (ref.kind === 'pipe') {
       const p = state.pipes.find(p => p.id === ref.id);
       if (!p) return null;
@@ -1008,6 +1078,7 @@ function nudgeAnchor(ref) {
   if (ref.kind === 'node') { const n = nodeById(ref.id); return n ? { x: n.x, y: n.y } : null; }
   if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); return t ? { x: t.x, y: t.y } : null; }
   if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); return z ? { x: z.x, y: z.y } : null; }
+  if (ref.kind === 'shape') { const sh = shapeById(ref.id); return sh ? { x: sh.x, y: sh.y } : null; }
   if (ref.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === ref.id); if (!p) return null;
     const verts = ref.verts || p.pts.map((_, i) => i);
@@ -1034,6 +1105,7 @@ function nudgeSelection(dx, dy, gridAlign) {
     if (ref.kind === 'node') { const n = nodeById(ref.id); if (n) { n.x += dx; n.y += dy; } }
     else if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); if (t) { t.x += dx; t.y += dy; } }
     else if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); if (z) { z.x += dx; z.y += dy; } }
+    else if (ref.kind === 'shape') { const sh = shapeById(ref.id); if (sh) { sh.x += dx; sh.y += dy; } }
     else if (ref.kind === 'pipe') {
       const p = state.pipes.find(p => p.id === ref.id);
       if (p) {
@@ -1115,6 +1187,8 @@ function onDown(e) {
 
   if (tool === 'zone') { drag = { mode: 'zoneNew', start: { x: snap(w.x), y: snap(w.y) }, id: null }; return; }
 
+  if (tool === 'shape') { drag = { mode: 'shapeNew', start: { x: snap(w.x), y: snap(w.y) }, id: null }; return; }
+
   if (tool === 'text') {
     const txt = prompt('Label text:'); if (!txt) return;
     mutate(() => { const t = { id: uid(), x: snap(w.x), y: snap(w.y), text: txt, size: 14 }; state.texts.push(t); select({ kind: 'text', id: t.id }); });
@@ -1142,12 +1216,19 @@ function onDown(e) {
     const z = state.zones.find(z => z.id === sel.id);
     if (z) { const hi = hitZoneHandle(z, w); if (hi >= 0) { snapshot(); drag = { mode: 'zoneResize', zone: z, hi }; return; } }
   }
+  // resize handle of selected shape?
+  if (sel && sel.kind === 'shape') {
+    const sh = shapeById(sel.id);
+    if (sh) { const hi = hitZoneHandle(sh, w); if (hi >= 0) { snapshot(); drag = { mode: 'shapeResize', shape: sh, hi }; return; } }
+  }
   const n = hitNode(w);
   if (n) { select({ kind: 'node', id: n.id }); snapshot(); drag = { mode: 'node', node: n, dx: w.x - n.x, dy: w.y - n.y }; return; }
   const p = hitPipe(w);
   if (p) { select({ kind: 'pipe', id: p.id }); snapshot(); drag = { mode: 'pipe', pipe: p, origin: w, orig: p.pts.map(pt => ({ x: pt.x, y: pt.y })) }; return; }
   const t = hitText(w);
   if (t) { select({ kind: 'text', id: t.id }); snapshot(); drag = { mode: 'text', text: t, dx: w.x - t.x, dy: w.y - t.y }; return; }
+  const shp = hitShape(w);
+  if (shp) { select({ kind: 'shape', id: shp.id }); snapshot(); drag = { mode: 'shape', shape: shp, origin: w, ox: shp.x, oy: shp.y }; return; }
   const z = hitZoneLabel(w);
   if (z) { select({ kind: 'zone', id: z.id }); snapshot(); drag = { mode: 'zone', zone: z, origin: w, ox: z.x, oy: z.y }; return; }
   // empty space: start a marquee (drag-box) selection. Pan is still available via
@@ -1179,6 +1260,7 @@ function onMove(e) {
       if (it.kind === 'node') { const n = nodeById(it.id); if (n) { n.x = it.x + dx; n.y = it.y + dy; } }
       else if (it.kind === 'text') { const t = state.texts.find(t => t.id === it.id); if (t) { t.x = it.x + dx; t.y = it.y + dy; } }
       else if (it.kind === 'zone') { const z = state.zones.find(z => z.id === it.id); if (z) { z.x = it.x + dx; z.y = it.y + dy; } }
+      else if (it.kind === 'shape') { const sh = shapeById(it.id); if (sh) { sh.x = it.x + dx; sh.y = it.y + dy; } }
       else if (it.kind === 'pipe') {
         const p = state.pipes.find(p => p.id === it.id);
         if (p) it.verts.forEach((vi, k) => { const pt = p.pts[vi], o = it.orig[k]; if (pt && o && !pt.node) { pt.x = o.x + dx; pt.y = o.y + dy; } });
@@ -1214,6 +1296,31 @@ function onMove(e) {
     dirty = true; draw(); return;
   }
   if (drag.mode === 'zoneResize') { resizeZone(drag.zone, drag.hi, snap(w.x), snap(w.y)); dirty = true; draw(); return; }
+  if (drag.mode === 'shape') {
+    let dx = w.x - drag.origin.x, dy = w.y - drag.origin.y;
+    if (snapOn) { dx = Math.round(dx / GRID) * GRID; dy = Math.round(dy / GRID) * GRID; }
+    drag.shape.x = drag.ox + dx; drag.shape.y = drag.oy + dy;
+    dirty = true; draw(); return;
+  }
+  if (drag.mode === 'shapeResize') { resizeZone(drag.shape, drag.hi, snap(w.x), snap(w.y)); dirty = true; draw(); return; }
+  if (drag.mode === 'shapeNew') {
+    let dx = snap(w.x) - drag.start.x, dy = snap(w.y) - drag.start.y;
+    if (!drag.id && !dx && !dy) return;          // not dragged yet — a plain click drops a default shape on release
+    if (e.shiftKey) {                            // Shift: square / circle
+      const m = Math.max(Math.abs(dx), Math.abs(dy));
+      dx = (dx < 0 ? -1 : 1) * m; dy = (dy < 0 ? -1 : 1) * m;
+    }
+    if (!drag.id) {
+      snapshot();
+      const sh = { id: uid(), type: shapeKind, x: drag.start.x, y: drag.start.y, w: GRID, h: GRID, ...shapeStyle };
+      state.shapes.push(sh); drag.id = sh.id;
+    }
+    const sh = shapeById(drag.id);
+    const minS = snapOn ? GRID : 4;
+    sh.x = Math.min(drag.start.x, drag.start.x + dx); sh.y = Math.min(drag.start.y, drag.start.y + dy);
+    sh.w = Math.max(minS, Math.abs(dx)); sh.h = Math.max(minS, Math.abs(dy));
+    dirty = true; draw(); return;
+  }
 }
 
 function onUp() {
@@ -1224,7 +1331,19 @@ function onUp() {
     if (z) { select({ kind: 'zone', id: z.id }); }
     setTool('select');
   }
-  if (drag && ['node', 'text', 'vertex', 'pipe', 'zone', 'zoneResize'].includes(drag.mode)) commit();
+  if (drag && drag.mode === 'shapeNew') {
+    if (drag.id) { select({ kind: 'shape', id: drag.id }); commit(); }
+    else {
+      // plain click: drop a default-size shape centred on the click point
+      const w = shapeKind === 'ellipse' ? 60 : 80, h = 60, st = drag.start;
+      mutate(() => {
+        const sh = { id: uid(), type: shapeKind, x: snap(st.x - w / 2), y: snap(st.y - h / 2), w, h, ...shapeStyle };
+        state.shapes.push(sh); select({ kind: 'shape', id: sh.id });
+      });
+    }
+    setTool('select'); drag = null; return;
+  }
+  if (drag && ['node', 'text', 'vertex', 'pipe', 'zone', 'zoneResize', 'shape', 'shapeResize'].includes(drag.mode)) commit();
   drag = null;
 }
 
@@ -1311,13 +1430,13 @@ function renderInspector() {
   const body = $('#inspBody'), empty = $('#inspEmpty');
   if (group.length >= 1) {
     empty.hidden = true; body.hidden = false;
-    const counts = { node: 0, point: 0, zone: 0, text: 0 };
+    const counts = { node: 0, point: 0, zone: 0, shape: 0, text: 0 };
     for (const r of group) {
       if (r.kind === 'pipe') counts.point += (r.verts ? r.verts.length : 0);
       else counts[r.kind]++;
     }
-    const total = counts.node + counts.point + counts.zone + counts.text;
-    const noun = { node: 'asset', point: 'pipe point', zone: 'area', text: 'label' };
+    const total = counts.node + counts.point + counts.zone + counts.shape + counts.text;
+    const noun = { node: 'asset', point: 'pipe point', zone: 'area', shape: 'shape', text: 'label' };
     const parts = Object.entries(counts).filter(([, n]) => n > 0)
       .map(([k, n]) => `${n} ${noun[k]}${n > 1 ? 's' : ''}`).join(' · ');
     const movable = alignableUnits().length;
@@ -1361,6 +1480,17 @@ function renderInspector() {
     h += `<div class="insp-row"><label>Name position</label><div class="pos-grid">${ZONE_LABELPOS.map(([p, t]) => `<button type="button" class="${(z.labelPos || 'tl') === p ? 'sel' : ''}" data-zpos="${p}" title="${t}">${zoneLabelPosIcon(p)}</button>`).join('')}</div></div>`;
     h += `<div class="insp-row"><label>Fill colour</label><div class="swatch-row">${ZONE_COLORS.map(c => `<div class="swatch ${z.color === c ? 'sel' : ''}" data-zc="${c}" style="background:${c}"></div>`).join('')}</div></div>`;
     h += `<button class="btn-del" data-del>Delete area</button>`;
+  } else if (sel.kind === 'shape') {
+    const sh = shapeById(sel.id); if (!sh) return select(null);
+    h += `<div class="insp-head"><span class="badge">SHAPE</span><h3>${SHAPE_NAMES[sh.type] || 'Shape'}</h3></div>`;
+    h += row('Shape', `<select class="i-stype">${Object.entries(SHAPE_NAMES).map(([k, v]) => `<option value="${k}" ${sh.type === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`);
+    h += `<div class="insp-row"><label>Line colour</label><div class="swatch-row">${SHAPE_STROKES.map(c => `<div class="swatch ${sh.stroke === c ? 'sel' : ''}" data-sstroke="${c}" style="background:${c}"></div>`).join('')}</div></div>`;
+    h += `<div class="insp-row"><label>Fill</label><div class="swatch-row">${SHAPE_FILLS.map(c => `<div class="swatch ${c ? '' : 'none'} ${(sh.fill || '') === c ? 'sel' : ''}" data-sfill="${c}" title="${c ? c : 'No fill'}" style="${c ? `background:${c}` : ''}"></div>`).join('')}</div></div>`;
+    h += row('Line weight', `<select class="i-slw">${SHAPE_WEIGHTS.map(([v, t]) => `<option value="${v}" ${(sh.lw || 2) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>`);
+    h += row('Line style', `<select class="i-sdash"><option value="0" ${!sh.dash ? 'selected' : ''}>Solid</option><option value="1" ${sh.dash ? 'selected' : ''}>Dashed</option></select>`);
+    h += `<div class="insp-row"><label>Size (W × H)</label><div class="size-row"><input class="i-sw" type="number" min="4" step="${GRID}" value="${Math.round(sh.w)}"><span>×</span><input class="i-sh" type="number" min="4" step="${GRID}" value="${Math.round(sh.h)}"></div></div>`;
+    h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">Drag the square handles to resize. Hold Shift while drawing for a square or circle.</p>`;
+    h += `<button class="btn-del" data-del>Delete shape</button>`;
   } else if (sel.kind === 'text') {
     const t = state.texts.find(t => t.id === sel.id); if (!t) return select(null);
     h += `<div class="insp-head"><span class="badge">TEXT</span><h3>Label</h3></div>`;
@@ -1406,6 +1536,20 @@ function wireInspector() {
     set('.i-zlabel', 'input', e => { z.label = e.target.value; dirty = true; draw(); });
     $$('[data-zpos]', body).forEach(b => b.addEventListener('click', () => { z.labelPos = b.dataset.zpos; renderInspector(); commit(); }));
     $$('[data-zc]', body).forEach(s => s.addEventListener('click', () => { z.color = s.dataset.zc; renderInspector(); commit(); }));
+  } else if (sel.kind === 'shape') {
+    const sh = shapeById(sel.id);
+    // style edits also become the default for the next shape drawn
+    const style = (k, v) => { sh[k] = v; shapeStyle[k] = v; };
+    set('.i-stype', 'change', e => { sh.type = e.target.value; commit(); renderInspector(); });
+    $$('[data-sstroke]', body).forEach(b => b.addEventListener('click', () => { style('stroke', b.dataset.sstroke); renderInspector(); commit(); }));
+    $$('[data-sfill]', body).forEach(b => b.addEventListener('click', () => { style('fill', b.dataset.sfill); renderInspector(); commit(); }));
+    set('.i-slw', 'change', e => { style('lw', +e.target.value || 2); commit(); });
+    set('.i-sdash', 'change', e => { style('dash', e.target.value === '1'); commit(); });
+    const sizeIn = (cls, key) => {
+      set(cls, 'input', e => { const v = +e.target.value; if (v >= 4) { sh[key] = v; dirty = true; draw(); } });
+      set(cls, 'change', e => { sh[key] = Math.max(4, +e.target.value || sh[key]); e.target.value = Math.round(sh[key]); commit(); });
+    };
+    sizeIn('.i-sw', 'w'); sizeIn('.i-sh', 'h');
   } else if (sel.kind === 'text') {
     const t = state.texts.find(t => t.id === sel.id);
     set('.i-text', 'input', e => { t.text = e.target.value; dirty = true; draw(); });
@@ -1418,12 +1562,13 @@ function wireInspector() {
 
 function deleteSelected() {
   if (group.length) {
-    const nodeIds = new Set(), zoneIds = new Set(), textIds = new Set();
+    const nodeIds = new Set(), zoneIds = new Set(), textIds = new Set(), shapeIds = new Set();
     const pipeVerts = new Map();   // pipe id → Set of vertex indices to remove
     for (const r of group) {
       if (r.kind === 'node') nodeIds.add(r.id);
       else if (r.kind === 'zone') zoneIds.add(r.id);
       else if (r.kind === 'text') textIds.add(r.id);
+      else if (r.kind === 'shape') shapeIds.add(r.id);
       else if (r.kind === 'pipe') {
         const set = pipeVerts.get(r.id) || new Set();
         (r.verts || []).forEach(i => set.add(i));
@@ -1445,6 +1590,7 @@ function deleteSelected() {
       }
       if (zoneIds.size) state.zones = state.zones.filter(z => !zoneIds.has(z.id));
       if (textIds.size) state.texts = state.texts.filter(t => !textIds.has(t.id));
+      if (shapeIds.size) state.shapes = state.shapes.filter(s => !shapeIds.has(s.id));
       select(null);
     });
     return;
@@ -1458,6 +1604,7 @@ function deleteSelected() {
     } else if (sel.kind === 'pipe') state.pipes = state.pipes.filter(p => p.id !== sel.id);
     else if (sel.kind === 'zone') state.zones = state.zones.filter(z => z.id !== sel.id);
     else if (sel.kind === 'text') state.texts = state.texts.filter(t => t.id !== sel.id);
+    else if (sel.kind === 'shape') state.shapes = state.shapes.filter(s => s.id !== sel.id);
     select(null);
   });
 }
@@ -1518,6 +1665,10 @@ function refBBox(ref) {
     const z = state.zones.find(z => z.id === ref.id); if (!z) return null;
     return { x1: z.x, y1: z.y, x2: z.x + z.w, y2: z.y + z.h };
   }
+  if (ref.kind === 'shape') {
+    const sh = shapeById(ref.id); if (!sh) return null;
+    return { x1: sh.x, y1: sh.y, x2: sh.x + sh.w, y2: sh.y + sh.h };
+  }
   if (ref.kind === 'text') {
     const t = state.texts.find(t => t.id === ref.id); if (!t) return null;
     const m = textBlock(t);
@@ -1540,6 +1691,7 @@ function translateRef(ref, dx, dy) {
   if (ref.kind === 'node') { const n = nodeById(ref.id); if (n) { n.x += dx; n.y += dy; } }
   else if (ref.kind === 'zone') { const z = state.zones.find(z => z.id === ref.id); if (z) { z.x += dx; z.y += dy; } }
   else if (ref.kind === 'text') { const t = state.texts.find(t => t.id === ref.id); if (t) { t.x += dx; t.y += dy; } }
+  else if (ref.kind === 'shape') { const sh = shapeById(ref.id); if (sh) { sh.x += dx; sh.y += dy; } }
   else if (ref.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === ref.id); if (!p) return;
     for (const i of pipeMoveVerts(ref, p)) { p.pts[i].x += dx; p.pts[i].y += dy; }
@@ -1604,7 +1756,7 @@ function distributeSelection(axis) {
    CLIPBOARD (in-app copy / paste of selected items)
    ============================================================ */
 const cloneObj = o => JSON.parse(JSON.stringify(o));
-let clipboard = null;   // { nodes, pipes, zones, texts } — self-contained snapshot of a selection
+let clipboard = null;   // { nodes, pipes, zones, shapes, texts } — self-contained snapshot of a selection
 let pasteSeq = 0;       // grows per offset-paste so repeated pastes cascade instead of stacking
 
 /* The current selection as a flat list of refs, whether single or grouped. */
@@ -1615,18 +1767,19 @@ function selectionRefs() {
 }
 
 const clipboardCount = () =>
-  clipboard ? clipboard.nodes.length + clipboard.pipes.length + clipboard.zones.length + clipboard.texts.length : 0;
+  clipboard ? clipboard.nodes.length + clipboard.pipes.length + clipboard.zones.length + (clipboard.shapes || []).length + clipboard.texts.length : 0;
 
 /* Snapshot the current selection into the in-app clipboard. Returns item count. */
 function captureToClipboard() {
   const refs = selectionRefs();
   if (!refs.length) return 0;
-  const ids = { node: new Set(), pipe: new Set(), zone: new Set(), text: new Set() };
+  const ids = { node: new Set(), pipe: new Set(), zone: new Set(), shape: new Set(), text: new Set() };
   for (const r of refs) ids[r.kind] && ids[r.kind].add(r.id);
   clipboard = {
     nodes: state.nodes.filter(n => ids.node.has(n.id)).map(cloneObj),
     pipes: state.pipes.filter(p => ids.pipe.has(p.id)).map(cloneObj),
     zones: state.zones.filter(z => ids.zone.has(z.id)).map(cloneObj),
+    shapes: state.shapes.filter(s => ids.shape.has(s.id)).map(cloneObj),
     texts: state.texts.filter(t => ids.text.has(t.id)).map(cloneObj),
   };
   pasteSeq = 0;   // next offset-paste starts one step from the originals
@@ -1653,6 +1806,7 @@ function clipboardBounds() {
   for (const n of clipboard.nodes) ext(n.x - n.w / 2, n.y - n.h / 2, n.x + n.w / 2, n.y + n.h / 2);
   for (const p of clipboard.pipes) for (const pt of p.pts) ext(pt.x, pt.y, pt.x, pt.y);
   for (const z of clipboard.zones) ext(z.x, z.y, z.x + z.w, z.y + z.h);
+  for (const s of (clipboard.shapes || [])) ext(s.x, s.y, s.x + s.w, s.y + s.h);
   for (const t of clipboard.texts) { const m = textBlock(t); ext(t.x, t.y - m.ascent, t.x + m.w, t.y - m.ascent + m.h); }
   return x1 === Infinity ? null : { x1, y1, x2, y2 };
 }
@@ -1701,6 +1855,12 @@ function pasteClipboard() {
       state.zones.unshift(nz); placed.push({ kind: 'zone', id: nz.id });
     }
 
+    for (const s of (clipboard.shapes || [])) {
+      const ns = cloneObj(s); ns.id = uid();
+      ns.x = snap(s.x + dx); ns.y = snap(s.y + dy);
+      state.shapes.push(ns); placed.push({ kind: 'shape', id: ns.id });
+    }
+
     for (const t of clipboard.texts) {
       const nt = cloneObj(t); nt.id = uid();
       nt.x = snap(t.x + dx); nt.y = snap(t.y + dy);
@@ -1721,19 +1881,23 @@ function setTool(t, opts = {}) {
   tool = t;
   if (t === 'pipe' && opts.pipe) pipeKind = opts.pipe;
   if (t === 'asset' && opts.asset) assetKind = opts.asset;
+  if (t === 'shape' && opts.shape) shapeKind = opts.shape;
   if (t !== 'pipe') cancelDraft();
   $$('.tool').forEach(b => b.classList.remove('active'));
   let selector = `.tool[data-tool="${t}"]`;
   if (t === 'pipe') selector = `.tool[data-pipe="${pipeKind}"]`;
   if (t === 'asset') selector = `.tool[data-asset="${assetKind}"]`;
+  if (t === 'shape') selector = `.tool[data-shape="${shapeKind}"]`;
   const btn = $(selector); if (btn) btn.classList.add('active');
-  $('#statusTool').textContent = ({ select: 'Select', pan: 'Pan', zone: 'Area', text: 'Label', pipe: PIPES[pipeKind].name, asset: ASSETS[assetKind].name })[t] || t;
+  $('#statusTool').textContent = ({ select: 'Select', pan: 'Pan', zone: 'Area', text: 'Label', pipe: PIPES[pipeKind].name, asset: ASSETS[assetKind].name, shape: SHAPE_NAMES[shapeKind] })[t] || t;
   canvas.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair';
   if (t === 'pipe') hint('Click to start a run. Click bends, then click an asset or double-click to finish.');
   else if (t === 'asset') hint('Click on the grid to drop a ' + ASSETS[assetKind].name + '.');
   else if (t === 'zone') hint('Drag to draw a floor or area zone.');
+  else if (t === 'shape') hint('Drag to draw a ' + SHAPE_NAMES[shapeKind].toLowerCase() + ' — hold Shift for a ' + (shapeKind === 'ellipse' ? 'circle' : 'square') + '. Click to drop a default size.');
+  else hint('');
 }
-$$('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool, { pipe: b.dataset.pipe, asset: b.dataset.asset })));
+$$('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool, { pipe: b.dataset.pipe, asset: b.dataset.asset, shape: b.dataset.shape })));
 
 /* view controls */
 $('#zoomIn').onclick = () => zoomAt(canvas.width / dpr / 2, canvas.height / dpr / 2, 1.2);
@@ -1763,6 +1927,7 @@ function contentBounds(pad = 60) {
   let xs = [], ys = [];
   for (const n of state.nodes) { xs.push(n.x - n.w / 2, n.x + n.w / 2); ys.push(n.y - n.h / 2, n.y + n.h / 2); }
   for (const z of state.zones) { xs.push(z.x, z.x + z.w); ys.push(z.y, z.y + z.h); }
+  for (const sh of state.shapes) { xs.push(sh.x, sh.x + sh.w); ys.push(sh.y, sh.y + sh.h); }
   for (const p of state.pipes) for (const pt of p.pts) { const q = ptPos(pt); xs.push(q.x); ys.push(q.y); }
   for (const t of state.texts) { const m = textBlock(t); xs.push(t.x, t.x + m.w); ys.push(t.y - m.ascent, t.y - m.ascent + m.h); }
   if (!xs.length) return null;
@@ -1801,7 +1966,7 @@ const LS_KEY = 'flowmark.project.v1';
 let saveTimer;
 function autosave() { clearTimeout(saveTimer); saveTimer = setTimeout(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { } }, 400); }
 function loadAutosave() { try { const s = localStorage.getItem(LS_KEY); if (s) { state = normalize(JSON.parse(s)); return true; } } catch (e) { } return false; }
-function normalize(s) { s.zones ||= []; s.nodes ||= []; s.pipes ||= []; s.texts ||= []; s.page ||= { orientation: 'landscape' }; if (s.page.orientation !== 'portrait') s.page.orientation = 'landscape'; s.name ||= 'Untitled schematic'; s.meta ||= {}; s.meta.customer ??= ''; s.meta.site ??= ''; s.meta.date ??= ''; for (const n of s.nodes) n.props ||= {}; return s; }
+function normalize(s) { s.zones ||= []; s.nodes ||= []; s.pipes ||= []; s.texts ||= []; s.shapes ||= []; s.page ||= { orientation: 'landscape' }; if (s.page.orientation !== 'portrait') s.page.orientation = 'landscape'; s.name ||= 'Untitled schematic'; s.meta ||= {}; s.meta.customer ??= ''; s.meta.site ??= ''; s.meta.date ??= ''; for (const n of s.nodes) n.props ||= {}; return s; }
 
 /* File System Access API lets us write straight back over an existing file
    (a real "Save as" dialog + silent overwrite of the chosen file). Falls back
@@ -2221,7 +2386,7 @@ $('#menuSheet').addEventListener('click', e => {
   else if (act === 'titleblock') openTitleModal();
   else if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rotate pump · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -2274,6 +2439,7 @@ window.addEventListener('keydown', e => {
     if (k === 'v') setTool('select'); else if (k === 'h') setTool('pan');
     else if (k === 'p') setTool('pipe', { pipe: pipeKind }); else if (k === 'z') setTool('zone');
     else if (k === 't') setTool('text');
+    else if (k === 'r') setTool('shape', { shape: 'rect' }); else if (k === 'e') setTool('shape', { shape: 'ellipse' });
   }
 });
 window.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; canvas.style.cursor = tool === 'pan' ? 'grab' : tool === 'select' ? 'default' : 'crosshair'; } });

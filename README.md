@@ -21,6 +21,8 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   - Hot – flow (solid red)
   - Hot – return (dashed red)
   - Dead-leg (dash-dot amber, with an end-cap marker)
+- **Draw simple shapes** — rectangles and ellipses (Shift for square / circle)
+  with adjustable line colour, fill, weight and dashed/solid style.
 - **Define zones** for floors and workspaces (Ground / 1st / 2nd floor,
   workshop, office, plant room, etc.).
 - **Inspect & label** every asset — tag, volume, size, location, risk rating
@@ -119,6 +121,8 @@ install FlowMark. Every push to `main` redeploys automatically.
 | `P` | Pipe |
 | `Z` | Zone |
 | `T` | Text |
+| `R` | Rectangle (rotates a selected pump instead) |
+| `E` | Ellipse |
 | `Del` | Delete selected |
 | `Ctrl/⌘ + Z` | Undo |
 | `Ctrl/⌘ + Shift + Z` | Redo |
