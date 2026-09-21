@@ -31,6 +31,13 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   *Forward* (from where the run was started to where it ends) or *Reverse*.
   Small chevrons in the pipe's colour are spaced evenly along the run, follow
   curves, and appear in PDF/JPG exports.
+- **Crossover bridges** — where two pipe runs cross, the run drawn later hops
+  over the earlier one with a small semicircular bridge, so each run can be
+  followed straight through the crossing. Bridges stand up on horizontal runs
+  and lean left on vertical ones, follow curves, stay solid on dashed runs, and
+  merge into one wider hop over tight bundles. Tees (a run ending on another)
+  and runs meeting at an asset are junctions, not crossings, so get no bridge.
+  Toggle them with *Bridges* in the view bar; they appear in PDF/JPG exports.
 - **Curve pipe runs** — while drawing, press, hold and drag instead of
   clicking: the cursor sets the corner the pipe bends round (snaps to the grid,
   so quarter bends are easy). Curves can end on an asset too. Select a pipe and

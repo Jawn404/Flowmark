@@ -65,7 +65,7 @@ let sel = null;               // {kind:'node'|'pipe'|'zone'|'shape'|'text', id} 
 let group = [];               // multi-selection: array of {kind,id}. When >1, sel is null.
 let draft = null;             // pipe being drawn
 let ortho = true;             // right-angle pipe mode
-let showGrid = true, snapOn = true, showLegend = true, showFooter = true;
+let showGrid = true, snapOn = true, showLegend = true, showFooter = true, showHops = true;
 let dirty = false;
 
 /* undo stack */
@@ -516,8 +516,9 @@ function drawScene(c, T, opts = {}) {
   }
   // shapes (above zones, beneath pipework and assets)
   for (const sh of state.shapes) drawShape(c, sh, S, X, Y);
-  // pipes
-  for (const p of state.pipes) drawPipe(c, p, S, OX, OY);
+  // pipes — later runs bridge over earlier ones where they cross
+  const hops = showHops ? pipeHops() : null;
+  for (const p of state.pipes) drawPipe(c, p, S, OX, OY, hops && hops.get(p.id));
   // nodes
   for (const n of state.nodes) drawNode(c, n, S, OX, OY);
   // texts (multi-line + optional word-wrap)
@@ -558,17 +559,29 @@ function drawShape(c, sh, S, X, Y) {
   c.restore();
 }
 
-function drawPipe(c, p, S, OX, OY) {
+function drawPipe(c, p, S, OX, OY, hop) {
   const cfg = PIPES[p.type] || PIPES.coldMains;
   const pts = resolvePipePts(p.pts);
   if (pts.length < 2) return;
   c.beginPath();
-  tracePipe(c, p.pts, pts, x => x * S + OX, y => y * S + OY);
+  if (hop && hop.spans.length) traceHopped(c, hop, S, x => x * S + OX, y => y * S + OY);
+  else tracePipe(c, p.pts, pts, x => x * S + OX, y => y * S + OY);
   c.strokeStyle = cfg.color;
   c.lineWidth = cfg.width * Math.max(.8, Math.min(S, 1.6));
   c.lineJoin = 'round'; c.lineCap = 'round';
   c.setLineDash(cfg.dash.map(d => d * Math.max(.8, Math.min(S, 1.4))));
   c.stroke(); c.setLineDash([]);
+  // On dashed runs, re-stroke each bridge solid so a dash gap can never land on
+  // it and leave the crossing looking broken.
+  if (hop && hop.spans.length && cfg.dash.length) {
+    c.beginPath();
+    for (const sp of hop.spans) {
+      const g = hopArc(hop.m, sp); if (g.r <= 1e-6) continue;
+      c.moveTo(g.a.x * S + OX, g.a.y * S + OY);
+      c.arc(g.cx * S + OX, g.cy * S + OY, g.r * S, g.th + Math.PI, g.th, g.flip);
+    }
+    c.stroke();
+  }
   // capped / blanked ends — a bar square to the run, in the pipe's own colour
   // (always solid, even on dashed runs) so a capped hot leg still reads as hot.
   const caps = pipeCaps(p);
@@ -588,7 +601,9 @@ function drawPipe(c, p, S, OX, OY) {
   if (p.flow === 'fwd' || p.flow === 'rev') {
     const k = Math.min(S, 1.6), len = 8 * k, half = 4.6 * k;
     c.fillStyle = cfg.color;
-    for (const a of flowArrows(p, pts)) {
+    let arrows = flowArrows(p, pts);
+    if (hop) arrows = arrows.map(a => arrowClearOfHops(a, hop, p.flow === 'rev')).filter(Boolean);
+    for (const a of arrows) {
       const ax = a.x * S + OX, ay = a.y * S + OY, ca = Math.cos(a.ang), sa = Math.sin(a.ang);
       c.beginPath();
       c.moveTo(ax + ca * len * .6, ay + sa * len * .6);                                  // tip
@@ -625,9 +640,142 @@ function flowArrows(p, rp = resolvePipePts(p.pts)) {
     const g = seg[j], t = (at - g.s) / g.d;
     let ang = Math.atan2(g.b.y - g.a.y, g.b.x - g.a.x);
     if (rev) ang += Math.PI;
-    out.push({ x: g.a.x + (g.b.x - g.a.x) * t, y: g.a.y + (g.b.y - g.a.y) * t, ang });
+    out.push({ x: g.a.x + (g.b.x - g.a.x) * t, y: g.a.y + (g.b.y - g.a.y) * t, ang, s: at });
   }
   return out;
+}
+
+/* ---------- Pipe crossover bridges (line jumps) ----------
+   Where two runs cross, the one drawn later (later in state.pipes, so on top)
+   hops over the earlier one with a small semicircular bridge, making each run
+   easy to follow through the crossing. Bridges stand up on horizontal runs and
+   lean left on vertical ones. Everything is worked out in WORLD units from the
+   same flattened polyline the run is drawn from, so bridges sit in identical
+   places on screen and in PDF/JPG exports. Junctions are not crossings: a run
+   that starts or ends on another run (a tee), or two runs meeting at an asset,
+   get no bridge. Crossings closer together than a bridge merge into one wider
+   bridge, so a run crossing a tight bundle clears it in a single hop. */
+const HOP_R = 6;                  // bridge radius, world units (grid = 20)
+const HOP_STEPS = 32;             // curve sampling for bridge maths + drawing
+const HOP_END_CLEAR = HOP_R + 4;  // no bridge this close to either run's ends
+const HOP_ARROW_CLEAR = 12;       // keep flow chevrons this far off a bridge
+
+/* Arc-length table for a polyline: cum[i] = distance from pts[0] to pts[i]. */
+function polyMeasure(pts) {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  return { pts, cum, total: cum[cum.length - 1] };
+}
+/* Point (and travel angle) at arc length s along a measured polyline. */
+function polyAt(m, s) {
+  const { pts, cum } = m;
+  let i = 1;
+  while (i < pts.length - 1 && cum[i] < s) i++;
+  const a = pts[i - 1], b = pts[i], d = cum[i] - cum[i - 1];
+  const t = d > 1e-9 ? Math.max(0, Math.min(1, (s - cum[i - 1]) / d)) : 0;
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, ang: Math.atan2(b.y - a.y, b.x - a.x) };
+}
+function polyBox(pts) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const q of pts) { if (q.x < x1) x1 = q.x; if (q.x > x2) x2 = q.x; if (q.y < y1) y1 = q.y; if (q.y > y2) y2 = q.y; }
+  return { x1, y1, x2, y2 };
+}
+/* Where segment a0→a1 crosses b0→b1, as fractions t (along a) and u (along b).
+   Parallel / collinear runs don't cross — they overlap — so they return null. */
+function segCross(a0, a1, b0, b1) {
+  const rx = a1.x - a0.x, ry = a1.y - a0.y, sx = b1.x - b0.x, sy = b1.y - b0.y;
+  const d = rx * sy - ry * sx;
+  if (Math.abs(d) < 1e-9 * (Math.hypot(rx, ry) * Math.hypot(sx, sy) || 1)) return null;
+  const qx = b0.x - a0.x, qy = b0.y - a0.y;
+  const t = (qx * sy - qy * sx) / d, u = (qx * ry - qy * rx) / d;
+  return (t >= 0 && t <= 1 && u >= 0 && u <= 1) ? { t, u } : null;
+}
+/* Map of pipe id → { m, spans, under } for every run involved in a crossing.
+   spans are the [s0, s1] arc-length intervals this run bridges over; under are
+   the places another run bridges over this one (kept so flow chevrons avoid
+   both). */
+function pipeHops() {
+  const runs = state.pipes.map(p => {
+    const rp = resolvePipePts(p.pts);
+    if (rp.length < 2) return null;
+    const m = polyMeasure(flattenPipe(p.pts, rp, HOP_STEPS));
+    return m.total > 2 * HOP_END_CLEAR ? { m, box: polyBox(m.pts) } : null;
+  });
+  const out = new Map();
+  const entry = k => { const id = state.pipes[k].id; let e = out.get(id); if (!e) out.set(id, e = { m: runs[k].m, spans: [], under: [] }); return e; };
+  for (let i = 1; i < runs.length; i++) {
+    const A = runs[i]; if (!A) continue;
+    const at = [];
+    for (let j = 0; j < i; j++) {
+      const B = runs[j];
+      if (!B || !rectsOverlap(A.box, B.box)) continue;
+      const P = A.m.pts, Q = B.m.pts;
+      for (let a = 1; a < P.length; a++) {
+        const a0 = P[a - 1], a1 = P[a];
+        const sb = { x1: Math.min(a0.x, a1.x), y1: Math.min(a0.y, a1.y), x2: Math.max(a0.x, a1.x), y2: Math.max(a0.y, a1.y) };
+        if (!rectsOverlap(sb, B.box)) continue;
+        for (let b = 1; b < Q.length; b++) {
+          const hit = segCross(a0, a1, Q[b - 1], Q[b]); if (!hit) continue;
+          const sa = A.m.cum[a - 1] + hit.t * (A.m.cum[a] - A.m.cum[a - 1]);
+          const sq = B.m.cum[b - 1] + hit.u * (B.m.cum[b] - B.m.cum[b - 1]);
+          // a meeting at either run's end is a junction, not a crossing
+          if (sa < HOP_END_CLEAR || sa > A.m.total - HOP_END_CLEAR) continue;
+          if (sq < HOP_END_CLEAR || sq > B.m.total - HOP_END_CLEAR) continue;
+          at.push(sa);
+          entry(j).under.push({ s0: sq - HOP_R, s1: sq + HOP_R });
+        }
+      }
+    }
+    if (!at.length) continue;
+    at.sort((x, y) => x - y);
+    const spans = entry(i).spans;
+    for (const s of at) {
+      const last = spans[spans.length - 1];
+      if (last && s - HOP_R <= last.s1 + 2) last.s1 = Math.max(last.s1, s + HOP_R);   // merge (also de-dupes vertex hits)
+      else spans.push({ s0: s - HOP_R, s1: s + HOP_R });
+    }
+  }
+  return out;
+}
+/* Geometry of one bridge: a semicircle on the chord a→b. Clockwise from a
+   round to b bulges to the left of travel, i.e. along (sin θ, −cos θ); flip so
+   the bridge always stands up (or, on a vertical run, leans left), whichever
+   way the run was drawn. */
+function hopArc(m, sp) {
+  const a = polyAt(m, sp.s0), b = polyAt(m, sp.s1);
+  const th = Math.atan2(b.y - a.y, b.x - a.x);
+  const nx = Math.sin(th), ny = -Math.cos(th);
+  return { a, b, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, r: Math.hypot(b.x - a.x, b.y - a.y) / 2, th,
+           flip: ny > 1e-9 || (Math.abs(ny) <= 1e-9 && nx > 0) };
+}
+/* Trace a run with its bridges onto the current path (caller strokes). Drawn as
+   one continuous path, so dashed runs keep their dash rhythm over the bridge. */
+function traceHopped(c, hop, S, X, Y) {
+  const { m, spans } = hop, P = m.pts;
+  c.moveTo(X(P[0].x), Y(P[0].y));
+  let k = 1;
+  for (const sp of spans) {
+    while (k < P.length && m.cum[k] < sp.s0) { c.lineTo(X(P[k].x), Y(P[k].y)); k++; }
+    const g = hopArc(m, sp);
+    c.lineTo(X(g.a.x), Y(g.a.y));
+    if (g.r > 1e-6) c.arc(X(g.cx), Y(g.cy), g.r * S, g.th + Math.PI, g.th, g.flip);
+    while (k < P.length && m.cum[k] <= sp.s1) k++;
+  }
+  for (; k < P.length; k++) c.lineTo(X(P[k].x), Y(P[k].y));
+}
+/* A flow chevron that would land on a bridge slides to the nearer clear side
+   of it (or is dropped if the run is too short to fit it anywhere clear). */
+function arrowClearOfHops(a, hop, rev) {
+  const { m } = hop, spans = hop.spans.concat(hop.under), g = HOP_ARROW_CLEAR;
+  const blocked = s => s < g || s > m.total - g || spans.some(sp => s > sp.s0 - g && s < sp.s1 + g);
+  if (!blocked(a.s)) return a;
+  const sp = spans.find(sp => a.s > sp.s0 - g && a.s < sp.s1 + g);
+  const opts = sp ? [sp.s0 - g, sp.s1 + g] : [g, m.total - g];
+  opts.sort((x, y) => Math.abs(x - a.s) - Math.abs(y - a.s));
+  const s = opts.find(v => !blocked(v));
+  if (s == null) return null;
+  const q = polyAt(m, s);
+  return { x: q.x, y: q.y, ang: q.ang + (rev ? Math.PI : 0), s };
 }
 
 /* ---------- Capped pipe ends ----------
@@ -2188,6 +2336,7 @@ $('#toggleGrid').onclick = e => { showGrid = !showGrid; e.currentTarget.classLis
 $('#toggleSnap').onclick = e => { snapOn = !snapOn; e.currentTarget.classList.toggle('active', snapOn); };
 $('#toggleLegend').onclick = e => { showLegend = !showLegend; e.currentTarget.classList.toggle('active', showLegend); draw(); };
 $('#toggleFooter').onclick = e => { showFooter = !showFooter; e.currentTarget.classList.toggle('active', showFooter); draw(); };
+$('#toggleHops').onclick = e => { showHops = !showHops; e.currentTarget.classList.toggle('active', showHops); draw(); };
 $('#togglePage').onclick = () => {
   mutate(() => {
     state.page ||= { orientation: 'landscape' };
