@@ -1111,7 +1111,8 @@ function outlineRef(ref, multi) {
       for (const i of verts) if (rp[i]) handle(sx(rp[i].x), sy(rp[i].y), '#0aa6c4');
     } else {
       for (let i = 1; i < p.pts.length; i++) if (hasCurve(p.pts[i])) curveGuide(p.pts, rp, i);
-      p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4'));
+      const av = activePipePoint(p);
+      p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4', i === av));
     }
   } else if (ref.kind === 'zone') {
     const z = state.zones.find(z => z.id === ref.id); if (!z) return;
@@ -1147,9 +1148,11 @@ function curveGuide(descr, rp, i) {
   ctx.beginPath(); ctx.arc(sx(q.x), sy(q.y), 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   ctx.restore();
 }
-function handle(x, y, col) {
-  ctx.fillStyle = '#fff'; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.rect(x - 4, y - 4, 8, 8); ctx.fill(); ctx.stroke();
+function handle(x, y, col, active) {
+  // the active (clicked) pipe point is drawn larger and filled
+  const r = active ? 5.5 : 4;
+  ctx.fillStyle = active ? col : '#fff'; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.rect(x - r, y - r, r * 2, r * 2); ctx.fill(); ctx.stroke();
 }
 function zoneHandles(z) {
   return [[z.x, z.y], [z.x + z.w, z.y], [z.x, z.y + z.h], [z.x + z.w, z.y + z.h],
@@ -1524,7 +1527,11 @@ function onDown(e) {
   if (sel && sel.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === sel.id);
     if (p) {
-      const vi = hitPipeVertex(p, w); if (vi >= 0) { snapshot(); drag = { mode: 'vertex', pipe: p, vi }; return; }
+      const vi = hitPipeVertex(p, w);
+      if (vi >= 0) {
+        if (sel.vi !== vi) { sel.vi = vi; renderInspector(); }   // clicked point becomes the active one
+        snapshot(); drag = { mode: 'vertex', pipe: p, vi }; draw(); return;
+      }
       const ci = hitCurveHandle(p, w); if (ci >= 0) { snapshot(); drag = { mode: 'curveHandle', pipe: p, i: ci }; return; }
     }
   }
@@ -1735,7 +1742,14 @@ function finishPipe() {
 }
 function cancelDraft() { draft = null; hint(''); draw(); }
 
-canvas.addEventListener('dblclick', () => { if (draft) finishPipe(); });
+canvas.addEventListener('dblclick', e => {
+  if (draft) { finishPipe(); return; }
+  // double-click a point of the selected pipe to delete it
+  if (tool === 'select' && sel && sel.kind === 'pipe') {
+    const p = state.pipes.find(p => p.id === sel.id);
+    if (p && hitPipeVertex(p, pointerWorld(e)) === activePipePoint(p)) deletePipePoint();
+  }
+});
 
 /* desktop wheel: pan, ctrl/⌘ = zoom */
 canvas.addEventListener('wheel', e => {
@@ -1842,8 +1856,10 @@ function renderInspector() {
     const pf = p.flow || 'none';
     h += `<div class="insp-row"><label>Flow direction</label><div class="cap-row">${FLOW_OPTS.map(([k, t, tip]) => `<button type="button" class="${pf === k ? 'sel' : ''}" data-pflow="${k}" title="${tip}">${t}</button>`).join('')}</div></div>`;
     const bends = p.pts.filter(hasCurve).length;
-    h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">${p.pts.length} points${bends ? ` · ${bends} curve${bends > 1 ? 's' : ''}` : ''}. Drag the square handles to reshape${bends ? ', or the round handles to change a curve' : ''}. Endpoints on an asset (green) follow it when moved.</p>`;
+    h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">${p.pts.length} points${bends ? ` · ${bends} curve${bends > 1 ? 's' : ''}` : ''}. Drag the square handles to reshape${bends ? ', or the round handles to change a curve' : ''}. Endpoints on an asset (green) follow it when moved. Click a point then press Delete (or double-click it) to remove just that point.</p>`;
     if (bends) h += `<button type="button" class="btn-sub i-straighten">Straighten curves</button>`;
+    const av = activePipePoint(p);
+    if (av >= 0 && p.pts.length > 2) h += `<button type="button" class="btn-sub i-delpt">Delete point ${av + 1} of ${p.pts.length}</button>`;
     h += `<button class="btn-del" data-del>Delete pipe</button>`;
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id); if (!z) return select(null);
@@ -1985,6 +2001,37 @@ function wireInspector() {
     set('.i-tsize', 'input', e => { t.size = +e.target.value || 14; dirty = true; draw(); });
   }
   const del = $('[data-del]', body); if (del) del.addEventListener('click', deleteSelected);
+  const delPt = $('.i-delpt', body); if (delPt) delPt.addEventListener('click', deletePipePoint);
+}
+
+/* Index of the active (last clicked) point of pipe p while it's the single
+   selection, or -1. Guards against stale indices after undo/redo. */
+function activePipePoint(p) {
+  if (!sel || sel.kind !== 'pipe' || !p || sel.id !== p.id) return -1;
+  return Number.isInteger(sel.vi) && sel.vi >= 0 && sel.vi < p.pts.length ? sel.vi : -1;
+}
+/* Remove the given vertex indices from a run. The segment that now joins the
+   neighbours of a removed point keeps the later point's curve (its round
+   handle stays where it was, so the bend can still be adjusted); a curve left
+   on the new first point is meaningless, so it's cleared. */
+function removePipePoints(p, drop) {
+  p.pts = p.pts.filter((_, i) => !drop.has(i));
+  if (p.pts[0]) delete p.pts[0].h;
+}
+/* Delete just the active point of the selected pipe. A two-point run can't
+   lose a point and stay a line, so it's removed entirely. */
+function deletePipePoint() {
+  if (!sel || sel.kind !== 'pipe') return;
+  const p = state.pipes.find(p => p.id === sel.id);
+  const vi = activePipePoint(p); if (vi < 0) return;
+  if (p.pts.length <= 2) { deleteSelected(); return; }
+  mutate(() => {
+    removePipePoints(p, new Set([vi]));
+    // keep a neighbouring point active so repeated Delete walks back along the run
+    sel.vi = Math.min(vi, p.pts.length - 1);
+  });
+  renderInspector();
+  toast('Point deleted');
 }
 
 function deleteSelected() {
@@ -2010,7 +2057,7 @@ function deleteSelected() {
       if (pipeVerts.size) {
         for (const [id, set] of pipeVerts) {
           const p = state.pipes.find(p => p.id === id);
-          if (p) p.pts = p.pts.filter((_, i) => !set.has(i));
+          if (p) removePipePoints(p, set);
         }
         // a run left with fewer than two points is no longer a line — drop it
         state.pipes = state.pipes.filter(p => p.pts.length >= 2);
@@ -2815,7 +2862,7 @@ $('#menuSheet').addEventListener('click', e => {
   else if (act === 'titleblock') openTitleModal();
   else if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Curved pipe: while drawing, press, hold and drag — the cursor sets the corner the pipe bends round. Select a pipe and drag its round handle to adjust a curve.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo · With a label selected: Ctrl/⌘+B bold · Ctrl/⌘+I italic · Ctrl/⌘+U underline · Ctrl/⌘+Shift+X strikethrough.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Curved pipe: while drawing, press, hold and drag — the cursor sets the corner the pipe bends round. Select a pipe and drag its round handle to adjust a curve.\n• To remove one point from a pipe: select the pipe, click the point, then press Del (or double-click the point).\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo · With a label selected: Ctrl/⌘+B bold · Ctrl/⌘+I italic · Ctrl/⌘+U underline · Ctrl/⌘+Shift+X strikethrough.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
@@ -2835,7 +2882,11 @@ window.addEventListener('keydown', e => {
     if (!$('#importModal').hidden) { closeImportModal(); return; }
     if (draft) cancelDraft(); else select(null);
   }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && (sel || group.length)) { e.preventDefault(); deleteSelected(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && (sel || group.length)) {
+    e.preventDefault();
+    const ap = sel && sel.kind === 'pipe' ? activePipePoint(state.pipes.find(p => p.id === sel.id)) : -1;
+    if (!group.length && ap >= 0) deletePipePoint(); else deleteSelected();
+  }
   { const k = fmtKeyFor(e); if (k && formattableTexts().length) { e.preventDefault(); toggleTextFmt(k); return; } }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }

@@ -149,7 +149,7 @@ install FlowMark. Every push to `main` redeploys automatically.
 | `T` | Text |
 | `R` | Rectangle (rotates a selected pump or free-standing cap instead) |
 | `E` | Ellipse |
-| `Del` | Delete selected |
+| `Del` | Delete selected (with a pipe point clicked: delete just that point) |
 | `Ctrl/⌘ + Z` | Undo |
 | `Ctrl/⌘ + Shift + Z` | Redo |
 
