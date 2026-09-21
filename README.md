@@ -21,6 +21,10 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   - Hot – flow (solid red)
   - Hot – return (dashed red)
   - Dead-leg (dash-dot amber, with an end-cap marker)
+- **Curve pipe runs** — while drawing, press, hold and drag instead of
+  clicking: the cursor sets the corner the pipe bends round (snaps to the grid,
+  so quarter bends are easy). Curves can end on an asset too. Select a pipe and
+  drag its round handle to reshape a curve, or use *Straighten curves*.
 - **Draw simple shapes** — rectangles and ellipses (Shift for square / circle)
   with adjustable line colour, fill, weight and dashed/solid style.
 - **Define zones** for floors and workspaces (Ground / 1st / 2nd floor,

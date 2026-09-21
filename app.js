@@ -130,9 +130,45 @@ function resolvePipePts(pts) {
     if (!pt.node) return raw[i];
     const n = nodeById(pt.node);
     if (!n) return raw[i];
-    const ref = raw[i - 1] || raw[i + 1];
+    // Face the neighbour the run actually approaches from: for a curved
+    // segment that's its control point, not the far end of the chord.
+    let ref;
+    if (i > 0) ref = hasCurve(pts[i]) ? curveCtrl(pts[i]) : raw[i - 1];
+    else if (pts[1]) ref = hasCurve(pts[1]) ? curveCtrl(pts[1]) : raw[1];
     return ref ? edgePoint(n, ref) : raw[i];
   });
+}
+
+/* ---------- Curved pipe segments ----------
+   Any pipe point may carry `h` — the bend handle set by click-hold-dragging
+   while drawing — stored as an offset from that point (world units). The
+   segment arriving at the point is then a quadratic Bézier whose control point
+   (the "corner" of the bend) sits at point + h. Because h is relative, moving,
+   nudging, group-dragging and pasting a run carry its curves along for free. */
+const hasCurve = pt => !!(pt && pt.h && (pt.h.x || pt.h.y));
+function curveCtrl(pt) { const q = ptPos(pt); return { x: q.x + pt.h.x, y: q.y + pt.h.y }; }
+/* Trace a run onto a path (caller does beginPath/stroke). descr = point
+   descriptors, rp = their resolved world positions, X/Y = world→device. */
+function tracePipe(c, descr, rp, X, Y) {
+  c.moveTo(X(rp[0].x), Y(rp[0].y));
+  for (let i = 1; i < rp.length; i++) {
+    if (hasCurve(descr[i])) { const q = curveCtrl(descr[i]); c.quadraticCurveTo(X(q.x), Y(q.y), X(rp[i].x), Y(rp[i].y)); }
+    else c.lineTo(X(rp[i].x), Y(rp[i].y));
+  }
+}
+/* Flatten a run to a world-space polyline (curves sampled) for hit-testing
+   and legend-avoidance. */
+function flattenPipe(descr, rp = resolvePipePts(descr), steps = 14) {
+  const out = rp.length ? [rp[0]] : [];
+  for (let i = 1; i < rp.length; i++) {
+    if (!hasCurve(descr[i])) { out.push(rp[i]); continue; }
+    const a = rp[i - 1], q = curveCtrl(descr[i]), b = rp[i];
+    for (let k = 1; k <= steps; k++) {
+      const t = k / steps, u = 1 - t;
+      out.push({ x: u * u * a.x + 2 * u * t * q.x + t * t * b.x, y: u * u * a.y + 2 * u * t * q.y + t * t * b.y });
+    }
+  }
+  return out;
 }
 
 /* ---------- Text label layout (multi-line + word-wrap) ----------
@@ -511,8 +547,7 @@ function drawPipe(c, p, S, OX, OY) {
   const pts = resolvePipePts(p.pts);
   if (pts.length < 2) return;
   c.beginPath();
-  c.moveTo(pts[0].x * S + OX, pts[0].y * S + OY);
-  for (let i = 1; i < pts.length; i++) c.lineTo(pts[i].x * S + OX, pts[i].y * S + OY);
+  tracePipe(c, p.pts, pts, x => x * S + OX, y => y * S + OY);
   c.strokeStyle = cfg.color;
   c.lineWidth = cfg.width * Math.max(.8, Math.min(S, 1.6));
   c.lineJoin = 'round'; c.lineCap = 'round';
@@ -520,7 +555,10 @@ function drawPipe(c, p, S, OX, OY) {
   c.stroke(); c.setLineDash([]);
   // deadleg end cap marker
   if (p.type === 'deadleg') {
-    const e = pts[pts.length - 1], b = pts[pts.length - 2];
+    const e = pts[pts.length - 1], last = p.pts[p.pts.length - 1];
+    // on a curved final segment the cap sits square to the arrival tangent
+    let b = pts[pts.length - 2];
+    if (hasCurve(last)) { const q = curveCtrl(last); if (q.x !== e.x || q.y !== e.y) b = q; }
     const ang = Math.atan2(e.y - b.y, e.x - b.x) + Math.PI / 2;
     const ex = e.x * S + OX, ey = e.y * S + OY, len = 6 * Math.min(S, 1.6);
     c.beginPath();
@@ -748,7 +786,7 @@ function contentObstacles(T) {
   for (const sh of state.shapes) rects.push({ x: X(sh.x), y: Y(sh.y), w: sh.w * S, h: sh.h * S });
   for (const t of state.texts) { const m = textBlock(t); rects.push({ x: X(t.x), y: Y(t.y - m.ascent), w: m.w * S, h: m.h * S }); }
   for (const p of state.pipes) {
-    const rp = resolvePipePts(p.pts);
+    const rp = flattenPipe(p.pts);
     const infl = (PIPES[p.type]?.width || 2) / 2 + 3;   // half the stroke + a little breathing room
     for (let i = 1; i < rp.length; i++) {
       const ax = X(rp[i - 1].x), ay = Y(rp[i - 1].y), bx = X(rp[i].x), by = Y(rp[i].y);
@@ -812,11 +850,11 @@ function outlineRef(ref, multi) {
       ctx.strokeStyle = '#0aa6c4'; ctx.globalAlpha = .18;
       ctx.lineWidth = (PIPES[p.type].width) * Math.max(.8, Math.min(view.scale, 1.6)) + 5;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(sx(rp[0].x), sy(rp[0].y));
-      for (let i = 1; i < rp.length; i++) ctx.lineTo(sx(rp[i].x), sy(rp[i].y));
+      ctx.beginPath(); tracePipe(ctx, p.pts, rp, sx, sy);
       ctx.stroke(); ctx.globalAlpha = 1;
       for (const i of verts) if (rp[i]) handle(sx(rp[i].x), sy(rp[i].y), '#0aa6c4');
     } else {
+      for (let i = 1; i < p.pts.length; i++) if (hasCurve(p.pts[i])) curveGuide(p.pts, rp, i);
       p.pts.forEach((pt, i) => handle(sx(rp[i].x), sy(rp[i].y), pt.node ? '#16a34a' : '#0aa6c4'));
     }
   } else if (ref.kind === 'zone') {
@@ -841,6 +879,18 @@ function outlineRef(ref, multi) {
     } else handle(sx(t.x), sy(t.y), '#0aa6c4');
   }
 }
+/* Bend guide for curved segment i: faint lines from each end to the control
+   point, and a round handle on it (distinct from the square vertex handles). */
+function curveGuide(descr, rp, i) {
+  const q = curveCtrl(descr[i]), a = rp[i - 1], b = rp[i];
+  ctx.save();
+  ctx.strokeStyle = '#0aa6c4'; ctx.lineWidth = 1; ctx.globalAlpha = .6; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(sx(a.x), sy(a.y)); ctx.lineTo(sx(q.x), sy(q.y)); ctx.lineTo(sx(b.x), sy(b.y)); ctx.stroke();
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  ctx.fillStyle = '#fff'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(sx(q.x), sy(q.y), 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
 function handle(x, y, col) {
   ctx.fillStyle = '#fff'; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.rect(x - 4, y - 4, 8, 8); ctx.fill(); ctx.stroke();
@@ -858,10 +908,10 @@ function drawDraft() {
   const cfg = PIPES[draft.type];
   ctx.strokeStyle = cfg.color; ctx.lineWidth = cfg.width; ctx.globalAlpha = .8;
   ctx.setLineDash(cfg.dash); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(sx(pts[0].x), sy(pts[0].y));
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(sx(pts[i].x), sy(pts[i].y));
+  ctx.beginPath(); tracePipe(ctx, descr, pts, sx, sy);
   ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   const rp = resolvePipePts(draft.pts);
+  if (drag && drag.mode === 'pipeBend' && drag.bent && hasCurve(draft.pts[drag.idx])) curveGuide(draft.pts, rp, drag.idx);
   for (let i = 0; i < draft.pts.length; i++) handle(sx(rp[i].x), sy(rp[i].y), '#0aa6c4');
 }
 
@@ -878,7 +928,7 @@ function hitNode(wpt) {
 function hitPipe(wpt) {
   const tol = 7 / view.scale;
   for (let i = state.pipes.length - 1; i >= 0; i--) {
-    const pts = resolvePipePts(state.pipes[i].pts);
+    const pts = flattenPipe(state.pipes[i].pts);
     for (let j = 0; j < pts.length - 1; j++)
       if (distToSeg(wpt, pts[j], pts[j + 1]) < tol) return state.pipes[i];
   }
@@ -888,6 +938,14 @@ function hitPipeVertex(p, wpt) {
   const tol = 8 / view.scale;
   const rp = resolvePipePts(p.pts);
   for (let i = 0; i < rp.length; i++) { const q = rp[i]; if (Math.hypot(q.x - wpt.x, q.y - wpt.y) < tol) return i; }
+  return -1;
+}
+function hitCurveHandle(p, wpt) {
+  const tol = 8 / view.scale;
+  for (let i = p.pts.length - 1; i >= 1; i--) {
+    if (!hasCurve(p.pts[i])) continue;
+    const q = curveCtrl(p.pts[i]); if (Math.hypot(q.x - wpt.x, q.y - wpt.y) < tol) return i;
+  }
   return -1;
 }
 function hitText(wpt) {
@@ -1174,7 +1232,7 @@ function onDown(e) {
 
   if (tool === 'pan' || e.button === 1 || spaceDown) { drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, ox: view.ox, oy: view.oy }; return; }
 
-  if (tool === 'pipe') { pipeClick(w); return; }
+  if (tool === 'pipe') { pipePress(w, e); return; }
 
   if (tool === 'asset') {
     mutate(() => {
@@ -1209,7 +1267,10 @@ function onDown(e) {
   // vertex of selected pipe?
   if (sel && sel.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === sel.id);
-    if (p) { const vi = hitPipeVertex(p, w); if (vi >= 0) { snapshot(); drag = { mode: 'vertex', pipe: p, vi }; return; } }
+    if (p) {
+      const vi = hitPipeVertex(p, w); if (vi >= 0) { snapshot(); drag = { mode: 'vertex', pipe: p, vi }; return; }
+      const ci = hitCurveHandle(p, w); if (ci >= 0) { snapshot(); drag = { mode: 'curveHandle', pipe: p, i: ci }; return; }
+    }
   }
   // zone handle of selected zone?
   if (sel && sel.kind === 'zone') {
@@ -1242,6 +1303,7 @@ function onMove(e) {
   pointerWorldPos = w; pointerInCanvas = true;
   updateCoords(w);
 
+  if (drag && drag.mode === 'pipeBend') { pipeBendMove(e, w); return; }
   if (tool === 'pipe' && draft) {
     let prev = draft.pts.length ? ptPos(draft.pts[draft.pts.length - 1]) : null;
     let pv = { x: snap(w.x), y: snap(w.y) };
@@ -1272,10 +1334,13 @@ function onMove(e) {
   if (drag.mode === 'text') { drag.text.x = snap(w.x - drag.dx); drag.text.y = snap(w.y - drag.dy); dirty = true; draw(); return; }
   if (drag.mode === 'vertex') {
     const near = nodeNear(w);
-    if (near) { drag.pipe.pts[drag.vi] = { x: near.x, y: near.y, node: near.id }; }
-    else { drag.pipe.pts[drag.vi] = { x: snap(w.x), y: snap(w.y) }; }
+    const h = drag.pipe.pts[drag.vi].h;    // keep the segment's bend
+    const np = near ? { x: near.x, y: near.y, node: near.id } : { x: snap(w.x), y: snap(w.y) };
+    if (h) np.h = h;
+    drag.pipe.pts[drag.vi] = np;
     dirty = true; draw(); return;
   }
+  if (drag.mode === 'curveHandle') { setBend(drag.pipe.pts[drag.i], w); dirty = true; draw(); return; }
   if (drag.mode === 'pipe') {
     let dx = w.x - drag.origin.x, dy = w.y - drag.origin.y;
     if (snapOn) { dx = Math.round(dx / GRID) * GRID; dy = Math.round(dy / GRID) * GRID; }
@@ -1324,6 +1389,14 @@ function onMove(e) {
 }
 
 function onUp() {
+  if (drag && drag.mode === 'pipeBend') {
+    // a press on an asset completes the run once the bend (if any) is set
+    const finish = drag.near && draft && draft.pts.length >= 2;
+    drag = null;
+    if (draft) hint(DRAFT_HINT);
+    if (finish) finishPipe(); else draw();
+    return;
+  }
   if (drag && drag.mode === 'marquee') { finishMarquee(); drag = null; return; }
   if (drag && drag.mode === 'group') { commit(); drag = null; return; }
   if (drag && drag.mode === 'zoneNew' && drag.id) {
@@ -1343,30 +1416,61 @@ function onUp() {
     }
     setTool('select'); drag = null; return;
   }
-  if (drag && ['node', 'text', 'vertex', 'pipe', 'zone', 'zoneResize', 'shape', 'shapeResize'].includes(drag.mode)) commit();
+  if (drag && ['node', 'text', 'vertex', 'curveHandle', 'pipe', 'zone', 'zoneResize', 'shape', 'shapeResize'].includes(drag.mode)) commit();
   drag = null;
 }
 
-function pipeClick(w) {
+const DRAFT_HINT = 'Click to add bends · click-hold-drag to curve · click an asset to connect · double-click or Enter to finish';
+/* Pipe tool press. A plain click places a point (right-angled to the previous
+   one). Holding and dragging instead curves the segment arriving at that point:
+   the cursor becomes the bend's corner (control point). Curved points are free
+   of the right-angle constraint, so a quarter bend is simply: press on the
+   diagonal grid point, drag to the corner. Pressing on an asset connects and
+   finishes the run on release, so the last leg can be curved into it too. */
+function pipePress(w, e) {
   const near = nodeNear(w);
-  let pt;
+  let pt, free = null;
   if (near) pt = { x: near.x, y: near.y, node: near.id };
   else {
-    let q = { x: snap(w.x), y: snap(w.y) };
-    if (draft && draft.pts.length && ortho) { const prev = ptPos(draft.pts[draft.pts.length - 1]); q = orthoConstrain(prev, q); }
-    pt = q;
+    free = { x: snap(w.x), y: snap(w.y) };
+    pt = { ...free };
+    if (draft && draft.pts.length && ortho) pt = orthoConstrain(ptPos(draft.pts[draft.pts.length - 1]), pt);
   }
-  if (!draft) { draft = { type: pipeKind, pts: [pt], preview: null }; hint('Click to add bends · click an asset to connect · double-click or Enter to finish'); }
-  else {
-    draft.pts.push(pt);
-    if (near && draft.pts.length >= 2) finishPipe();
-  }
+  if (!draft) { draft = { type: pipeKind, pts: [pt], preview: null }; hint(DRAFT_HINT); draw(); return; }
+  draft.pts.push(pt); draft.preview = null;
+  drag = { mode: 'pipeBend', idx: draft.pts.length - 1, free, near: !!near, sx: e.clientX, sy: e.clientY, bent: false };
   draw();
+}
+function pipeBendMove(e, w) {
+  if (!draft || !draft.pts[drag.idx]) { drag = null; return; }
+  const pt = draft.pts[drag.idx];
+  if (!drag.bent) {
+    if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;   // still a click
+    drag.bent = true;
+    if (drag.free) { pt.x = drag.free.x; pt.y = drag.free.y; }            // curves ignore right-angle mode
+    hint('Drag toward the corner of the bend · release to place');
+  }
+  setBend(pt, w); draw();
+}
+/* Point pt's incoming segment bends toward world position w (grid-snapped).
+   Dragging the corner back onto the point straightens it. */
+function setBend(pt, w) {
+  const a = ptPos(pt);
+  const h = { x: snap(w.x) - a.x, y: snap(w.y) - a.y };
+  if (Math.hypot(h.x, h.y) < 1) delete pt.h; else pt.h = h;
 }
 function orthoConstrain(prev, q) {
   return Math.abs(q.x - prev.x) >= Math.abs(q.y - prev.y) ? { x: q.x, y: prev.y } : { x: prev.x, y: q.y };
 }
+/* Two points at the same spot (e.g. the second press of a double-click). */
+const samePt = (a, b) => (a.node || b.node) ? a.node === b.node : a.x === b.x && a.y === b.y;
 function finishPipe() {
+  if (draft) {
+    // drop zero-length straight legs left by a double-click
+    const pts = [];
+    for (const pt of draft.pts) { const prev = pts[pts.length - 1]; if (!prev || hasCurve(pt) || !samePt(prev, pt)) pts.push(pt); }
+    draft.pts = pts;
+  }
   if (draft && draft.pts.length >= 2) {
     const p = { id: uid(), type: draft.type, pts: draft.pts };
     mutate(() => { state.pipes.push(p); select({ kind: 'pipe', id: p.id }); });
@@ -1375,7 +1479,7 @@ function finishPipe() {
 }
 function cancelDraft() { draft = null; hint(''); draw(); }
 
-canvas.addEventListener('dblclick', () => { if (draft) { draft.pts = draft.pts.slice(0, -0); finishPipe(); } });
+canvas.addEventListener('dblclick', () => { if (draft) finishPipe(); });
 
 /* desktop wheel: pan, ctrl/⌘ = zoom */
 canvas.addEventListener('wheel', e => {
@@ -1471,7 +1575,9 @@ function renderInspector() {
     const p = state.pipes.find(p => p.id === sel.id); if (!p) return select(null);
     h += `<div class="insp-head"><span class="badge" style="background:${PIPES[p.type].color}">PIPE</span><h3>Pipework</h3></div>`;
     h += row('Type', `<select class="i-ptype">${Object.entries(PIPES).map(([k, v]) => `<option value="${k}" ${p.type === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>`);
-    h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">${p.pts.length} points. Select and drag the square handles to reshape. Endpoints on an asset (green) follow it when moved.</p>`;
+    const bends = p.pts.filter(hasCurve).length;
+    h += `<p class="muted" style="font-size:12px;margin:4px 0 10px">${p.pts.length} points${bends ? ` · ${bends} curve${bends > 1 ? 's' : ''}` : ''}. Drag the square handles to reshape${bends ? ', or the round handles to change a curve' : ''}. Endpoints on an asset (green) follow it when moved.</p>`;
+    if (bends) h += `<button type="button" class="btn-sub i-straighten">Straighten curves</button>`;
     h += `<button class="btn-del" data-del>Delete pipe</button>`;
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id); if (!z) return select(null);
@@ -1531,6 +1637,7 @@ function wireInspector() {
   } else if (sel.kind === 'pipe') {
     const p = state.pipes.find(p => p.id === sel.id);
     set('.i-ptype', 'change', e => { p.type = e.target.value; commit(); renderInspector(); });
+    set('.i-straighten', 'click', () => { mutate(() => { for (const pt of p.pts) delete pt.h; }); renderInspector(); });
   } else if (sel.kind === 'zone') {
     const z = state.zones.find(z => z.id === sel.id);
     set('.i-zlabel', 'input', e => { z.label = e.target.value; dirty = true; draw(); });
@@ -1841,6 +1948,7 @@ function pasteClipboard() {
       const np = cloneObj(p); np.id = uid();
       np.pts = np.pts.map(pt => {
         const out = { x: snap(pt.x + dx), y: snap(pt.y + dy) };
+        if (pt.h) out.h = { x: pt.h.x, y: pt.h.y };
         // Keep the connection only if its asset was copied too; otherwise the
         // endpoint becomes a free point so the paste doesn't snap onto the original.
         if (pt.node && idMap.has(pt.node)) out.node = idMap.get(pt.node);
@@ -1891,7 +1999,7 @@ function setTool(t, opts = {}) {
   const btn = $(selector); if (btn) btn.classList.add('active');
   $('#statusTool').textContent = ({ select: 'Select', pan: 'Pan', zone: 'Area', text: 'Label', pipe: PIPES[pipeKind].name, asset: ASSETS[assetKind].name, shape: SHAPE_NAMES[shapeKind] })[t] || t;
   canvas.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair';
-  if (t === 'pipe') hint('Click to start a run. Click bends, then click an asset or double-click to finish.');
+  if (t === 'pipe') hint('Click to start a run. Click bends (hold and drag to curve), then click an asset or double-click to finish.');
   else if (t === 'asset') hint('Click on the grid to drop a ' + ASSETS[assetKind].name + '.');
   else if (t === 'zone') hint('Drag to draw a floor or area zone.');
   else if (t === 'shape') hint('Drag to draw a ' + SHAPE_NAMES[shapeKind].toLowerCase() + ' — hold Shift for a ' + (shapeKind === 'ellipse' ? 'circle' : 'square') + '. Click to drop a default size.');
@@ -1928,7 +2036,7 @@ function contentBounds(pad = 60) {
   for (const n of state.nodes) { xs.push(n.x - n.w / 2, n.x + n.w / 2); ys.push(n.y - n.h / 2, n.y + n.h / 2); }
   for (const z of state.zones) { xs.push(z.x, z.x + z.w); ys.push(z.y, z.y + z.h); }
   for (const sh of state.shapes) { xs.push(sh.x, sh.x + sh.w); ys.push(sh.y, sh.y + sh.h); }
-  for (const p of state.pipes) for (const pt of p.pts) { const q = ptPos(pt); xs.push(q.x); ys.push(q.y); }
+  for (const p of state.pipes) for (const q of flattenPipe(p.pts)) { xs.push(q.x); ys.push(q.y); }
   for (const t of state.texts) { const m = textBlock(t); xs.push(t.x, t.x + m.w); ys.push(t.y - m.ascent, t.y - m.ascent + m.h); }
   if (!xs.length) return null;
   return { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad, w: Math.max(...xs) - Math.min(...xs) + pad * 2, h: Math.max(...ys) - Math.min(...ys) + pad * 2 };
@@ -2386,7 +2494,7 @@ $('#menuSheet').addEventListener('click', e => {
   else if (act === 'titleblock') openTitleModal();
   else if (act === 'clear') { if (confirm('Clear everything on the canvas?')) mutate(() => { Object.assign(state, blankState(), { name: state.name }); select(null); }); }
   else if (act === 'sample') loadSample();
-  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
+  else if (act === 'help') alert('FlowMark — quick guide\n\n• Pick an asset on the left, click the grid to drop it.\n• Pick a pipe type, click to start, click bends, click an asset to connect, double-click/Enter to finish.\n• Curved pipe: while drawing, press, hold and drag — the cursor sets the corner the pipe bends round. Select a pipe and drag its round handle to adjust a curve.\n• Draw Areas for floors/rooms; drag the label tab to move them.\n• Draw Rectangles and Ellipses from Shapes; hold Shift for a square or circle.\n• Select anything to edit its label, size, risk and notes on the right.\n• Import PDF reads a Legionella report and detects assets.\n• Export to PDF or JPG from the top bar.\n\nShortcuts: V select · H pan · P pipe · Z area · T label · R rectangle (rotates a selected pump) · E ellipse · Arrow keys nudge (snaps to grid when Snap is on; Shift = 1 px fine) · Del delete · Ctrl/⌘+C copy · Ctrl/⌘+X cut · Ctrl/⌘+V paste (at cursor) · Ctrl/⌘+Z undo.');
   else if (act === 'about') alert('FlowMark\nWater system schematics for Legionella Risk Assessments.\nWorks offline once installed. Your projects stay on this device unless you save them to a file.');
   else if (act === 'install') triggerInstall();
 });
