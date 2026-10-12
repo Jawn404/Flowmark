@@ -29,7 +29,7 @@ const ASSETS = {
   pump:   { w: 30, h: 30, name: 'Pump', tag: 'P', fields: [] },
   tmv:    { w: 28, h: 28, name: 'Thermostatic mixing valve', tag: 'T', fields: ['risk'] },
   mixer:  { w: 28, h: 28, name: 'Mixer tap', tag: 'M', fields: [] },
-  shower: { w: 32, h: 36, name: 'Shower', tag: 'SH', fields: ['risk'] },
+  shower: { w: 32, h: 36, name: 'Shower', tag: 'SH', fields: ['risk'], noAutoLabel: true },
   outlet: { w: 22, h: 22, name: 'Outlet / tap', tag: '', fields: [] },
   cap:    { w: 22, h: 22, name: 'Capped / blanked end', tag: '', fields: [] },
 };
@@ -1777,7 +1777,7 @@ function resizeZone(z, hi, x, y) {
 
 /* ---------- labels ---------- */
 function autoLabel(type) {
-  const tag = ASSETS[type].tag; if (!tag) return '';
+  const tag = ASSETS[type].tag; if (!tag || ASSETS[type].noAutoLabel) return '';
   let max = 0;
   for (const n of state.nodes) if (n.type === type && n.label) { const m = /(\d+)$/.exec(n.label); if (m) max = Math.max(max, +m[1]); }
   return tag + (max + 1);
@@ -2753,7 +2753,7 @@ function placeDetected() {
   d.heaters.forEach((t, i) => { if (!keep('heaters', i)) return; const f = floorOf(t.location); const p = placeIn(f, 46, 56); state.nodes.push({ id: uid(), type: 'heater', x: snap(p.x), y: snap(p.y), w: ASSETS.heater.w, h: ASSETS.heater.h, label: t.tag, props: { volume: t.volume || '', location: t.location || '' } }); });
   for (let i = 0; i < d.tmvs; i++) if (keep('tmvs', i)) { const p = placeIn(floors[0], 28, 28); state.nodes.push({ id: uid(), type: 'tmv', x: snap(p.x), y: snap(p.y), w: 28, h: 28, label: 'T' + (i + 1), props: {} }); }
   for (let i = 0; i < d.mixers; i++) if (keep('mixers', i)) { const p = placeIn(floors[0], 28, 28); state.nodes.push({ id: uid(), type: 'mixer', x: snap(p.x), y: snap(p.y), w: 28, h: 28, label: 'M' + (i + 1), props: {} }); }
-  for (let i = 0; i < d.showers; i++) if (keep('showers', i)) { const p = placeIn(floors[floors.length - 1], 32, 36); state.nodes.push({ id: uid(), type: 'shower', x: snap(p.x), y: snap(p.y), w: 32, h: 36, label: 'SH' + (i + 1), props: {} }); }
+  for (let i = 0; i < d.showers; i++) if (keep('showers', i)) { const p = placeIn(floors[floors.length - 1], 32, 36); state.nodes.push({ id: uid(), type: 'shower', x: snap(p.x), y: snap(p.y), w: 32, h: 36, label: '', props: {} }); }
   d.outlets.forEach((t, i) => { if (!keep('outlets', i)) return; const f = floorOf(t.location); const p = placeIn(f, 22, 22); state.nodes.push({ id: uid(), type: 'outlet', x: snap(p.x), y: snap(p.y), w: 22, h: 22, label: '', props: { location: t.location || '' } }); });
   d.deadlegs.forEach((t, i) => { if (!keep('deadlegs', i)) return; const f = floors[0]; const p = placeIn(f, 22, 22); state.nodes.push({ id: uid(), type: 'cap', x: snap(p.x), y: snap(p.y), w: 22, h: 22, label: 'DL' + (i + 1), props: { notes: t.length ? t.length + ' mm' : '' } }); });
 
