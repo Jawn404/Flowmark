@@ -144,6 +144,7 @@
     <footer>
       <span class="muted" id="importSummary"></span>
       <span class="grow"></span>
+      <button class="tb" id="importCopy" title="Copy the text read from the PDF — useful for tuning detection">Copy report text</button>
       <button class="tb" id="importCancel">Cancel</button>
       <button class="tb primary" id="importPlace">Place on canvas</button>
     </footer>
@@ -213,6 +214,7 @@ Plant Room"></textarea>
 
 <!-- Libraries loaded lazily from CDN when needed (PDF import / export). -->
 <script src="app.js"></script>
+<script src="pdf-import.js"></script>
 <!-- Continue an existing pipe run — must load after app.js (hooks its functions). -->
 <script src="pipe-continue.js"></script>
 </body>
