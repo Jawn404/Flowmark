@@ -69,13 +69,28 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
 
 ### A note on PDF import
 
-The importer reads the **text** of a report and matches it against the patterns
-used in typical Legionella assessments (tanks, water heaters, TMVs, showers,
-outlets, dead-legs). It is a **best-effort heuristic, not OCR or AI** — it
-shows everything it found in a review list so you can tick/untick before
-anything is placed, and it will sometimes over- or under-count. Treat it as a
-head-start, then adjust by hand. Scanned/image-only PDFs (no embedded text)
-won't yield results.
+The importer (`pdf-import.js`) rebuilds the report's lines and table columns
+from the PDF text, then detects assets in order of reliability:
+
+1. **Asset IDs** — `TK1`, `CWST1`, `WH1`, `CAL1`, `SH3`, `TMV4`, `WS1`, `DL1`…
+   (TMV2/TMV3 are treated as valve classes unless they start a row or cell).
+2. **Register rows** — table rows or `Asset Type: … / Location: …` blocks that
+   name an asset type and a place. Tables repeated in another section aren't
+   double-counted.
+   Ara's own layout is read directly: the key/value asset forms
+   (`Location | Roof Void`, `Designation / asset no. | CWST1`, volume, risk)
+   and the outlet survey table, where each room's outlets are listed as
+   `1 x M`, `1 x Shwr`, `1 x C`, `1 x Dishwasher` (WCs aren't drawn).
+3. **Stated counts** — "6 showers", "Number of TMVs: 4", "No showers on site".
+4. **Bare mentions** — one row, unticked, marked *check*.
+
+Floors are read from each asset's location (Roof, Loft, Second–Ground Floor,
+Mezzanine, Basement, External…) and only floors that hold assets become areas,
+stacked highest first and fitted inside the sheet above the title block. The
+customer, site address and assessment date are offered for the title block.
+Hover a row in the review list to see the report line it came from; **Copy
+report text** copies what was read, which helps tune detection for a new
+report layout. Scanned/image-only PDFs (no embedded text) won't yield results.
 
 ---
 
@@ -140,7 +155,8 @@ install FlowMark. Every push to `main` redeploys automatically.
 |------|---------|
 | `index.html` | App shell and layout |
 | `styles.css` | Design system and responsive layout |
-| `app.js` | Editor: canvas, tools, assets, pipes, export, PDF import |
+| `app.js` | Editor: canvas, tools, assets, pipes, export |
+| `pdf-import.js` | Report import: PDF text → asset detection → review list → floor-by-floor layout |
 | `pipe-continue.js` | Continue an existing pipe run (loads after `app.js` and hooks its pipe-drawing functions) |
 | `manifest.webmanifest` | PWA metadata (name, icons, colours) |
 | `sw.js` | Service worker for offline caching |
