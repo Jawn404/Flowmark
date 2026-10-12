@@ -21,6 +21,15 @@ No build step, no server, no accounts — it's plain HTML, CSS and JavaScript.
   - Hot – flow (solid red)
   - Hot – return (dashed red)
   - Dead-leg (dash-dot amber, with an end-cap marker)
+- **Continue an existing run** — with a pipe tool selected, hover over the open
+  end of a run of the same type (it highlights with a ring) and click it to
+  carry on drawing from there. The new legs join the original run, so it stays
+  one pipe with one set of properties. Or select any pipe and use *Continue run
+  → From start / From end* in the side panel (this also works from an end
+  that's connected to an asset), or press `C` to continue from the selected
+  run's end — from its start if the first point is the active one. Bends,
+  curves, asset connections and double-click / Enter to finish all work as
+  normal; Esc abandons the extension, and one Undo removes it.
 - **Cap off any pipe run** — select a pipe and set *Capped end* to Start, End or
   Both. The blanking bar is drawn in the pipe's own colour, so a capped hot leg
   still reads as hot and a capped cold leg as cold. Deadlegs are capped at the
@@ -132,6 +141,7 @@ install FlowMark. Every push to `main` redeploys automatically.
 | `index.html` | App shell and layout |
 | `styles.css` | Design system and responsive layout |
 | `app.js` | Editor: canvas, tools, assets, pipes, export, PDF import |
+| `pipe-continue.js` | Continue an existing pipe run (loads after `app.js` and hooks its pipe-drawing functions) |
 | `manifest.webmanifest` | PWA metadata (name, icons, colours) |
 | `sw.js` | Service worker for offline caching |
 | `icons/` | App icons |
@@ -149,6 +159,7 @@ install FlowMark. Every push to `main` redeploys automatically.
 | `T` | Text |
 | `R` | Rectangle (rotates a selected pump or free-standing cap instead) |
 | `E` | Ellipse |
+| `C` | Continue the selected pipe run (from its end, or its start if that point is active) |
 | `Del` | Delete selected (with a pipe point clicked: delete just that point) |
 | `Ctrl/⌘ + Z` | Undo |
 | `Ctrl/⌘ + Shift + Z` | Redo |
