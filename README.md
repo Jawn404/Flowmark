@@ -77,6 +77,10 @@ from the PDF text, then detects assets in order of reliability:
 2. **Register rows** — table rows or `Asset Type: … / Location: …` blocks that
    name an asset type and a place. Tables repeated in another section aren't
    double-counted.
+   Ara's own layout is read directly: the key/value asset forms
+   (`Location | Roof Void`, `Designation / asset no. | CWST1`, volume, risk)
+   and the outlet survey table, where each room's outlets are listed as
+   `1 x M`, `1 x Shwr`, `1 x C`, `1 x Dishwasher` (WCs aren't drawn).
 3. **Stated counts** — "6 showers", "Number of TMVs: 4", "No showers on site".
 4. **Bare mentions** — one row, unticked, marked *check*.
 

@@ -50,7 +50,7 @@ const FMImport = (() => {
       // drop cells that ended up empty, keeping each cell's x position
       const parts = s.split(' | '), keep = [], kx = [];
       parts.forEach((p, i) => { if (p.trim()) { keep.push(p.trim()); kx.push(xs[i]); } });
-      if (keep.length) out.push({ page: pageNo, text: keep.join(' | '), xs: kx });
+      if (keep.length) out.push({ page: pageNo, y: r.y, text: keep.join(' | '), xs: kx });
     }
     return out;
   }
@@ -63,7 +63,7 @@ const FMImport = (() => {
     const seen = new Map();
     for (const l of lines) { const k = key(l.text); (seen.get(k) || seen.set(k, new Set()).get(k)).add(l.page); }
     return lines.filter(l => {
-      if (/^(?:page\s*)?#?\d+(?:\s*(?:of|\/)\s*\d+)?$/i.test(l.text.trim())) return false;
+      if (/^(?:page\s*)?#?\d+(?:\s*(?:of|\/)\s*\d+)?$/i.test(l.text.trim()) || /^[.\-•·_]+$/.test(l.text.trim())) return false;
       const n = seen.get(key(l.text)).size;
       return !(n >= 3 && n >= pages * 0.4);
     });
@@ -110,14 +110,14 @@ const FMImport = (() => {
     [/\b(?:upper[\s-]ground(?:\s*floor)?|UGF)\b/i, 'Upper Ground Floor', 0.5],
     [/\b(?:sub[\s-]?)?basement\b|\bcellar\b/i, 'Basement', -1],
     [/\bmezz(?:anine)?\b/i, 'Mezzanine', 0.6],
-    [/\bground\s*(?:floor|flr|level)?\b(?!\s*(?:source|water|loop|works?))|\bG\/?F\b/i, 'Ground Floor', 0],
-    [/\b(?:external(?:ly)?|outside|exterior|outbuildings?|yard)\b/i, 'External', -5],
+    [/\bground[\s-]*(?:floor|flr|level)?\b(?![\s-]*(?:source|water|loop|works?))|\bG\/?F\b/i, 'Ground Floor', 0],
+    [/\b(?:external(?:ly)?|outside|exterior|outbuildings?|yard|garden|car ?park)\b/i, 'External', -5],
   ];
   function floorOf(s) {
     if (!s) return null;
-    let m = /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:floor|flr|level)\b/i.exec(s);
+    let m = /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)[\s-]+(?:floor|flr|level)\b/i.exec(s);
     if (m) { const n = ORD[m[1].toLowerCase()]; return { name: ORD_NAME[n] + ' Floor', level: n, match: m[0] }; }
-    m = /\b(\d{1,2})(?:st|nd|rd|th)\s*(?:floor|flr)\b|\b(?:level|lvl|floor)\s*(\d{1,2})\b/i.exec(s);
+    m = /\b(\d{1,2})(?:st|nd|rd|th)[\s-]*(?:floor|flr)\b|\b(?:level|lvl|floor)\s*(\d{1,2})\b/i.exec(s);
     if (m) { const n = +(m[1] || m[2]); return { name: n === 0 ? 'Ground Floor' : (ORD_NAME[n] ? ORD_NAME[n] + ' Floor' : `Floor ${n}`), level: n, match: m[0] }; }
     for (const [re, name, level] of FLOOR_RULES) { m = re.exec(s); if (m) return { name, level, match: m[0] }; }
     return null;
@@ -261,8 +261,110 @@ const FMImport = (() => {
   }
   const numIn = s => { const m = /(\d{1,5})/.exec(s || ''); return m ? +m[1] : null; };
 
+  /* Boilerplate sections (contents, glossary, references) define every asset
+     type in passing — leave them out of detection. */
+  function dropBoilerplate(lines) {
+    const out = []; let skip = null;
+    for (const l of lines) {
+      const t = l.text.trim();
+      if (/^(?:\d+(?:\.\d+)*\.?\s*)?(?:contents|table of contents)$/i.test(t)) { skip = { page: l.page, toPageEnd: true }; continue; }
+      if (/^(?:\d+(?:\.\d+)*\.?\s*)?(?:glossary(?: of terms)?|references|bibliography)$/i.test(t)) { skip = { page: l.page, toPageEnd: false }; continue; }
+      if (skip) {
+        if (skip.toPageEnd && l.page !== skip.page) skip = null;
+        else if (!skip.toPageEnd && /^\d+(?:\.\d+)*\.?\s+[A-Z][A-Z &,'-]{3,}$/.test(t)) skip = null;
+        else continue;
+      }
+      out.push(l);
+    }
+    return out;
+  }
+
+  /* Form-style register ("Location | Roof Void", "Designation / asset no. | CWST1",
+     "Volume (litres) | 227" …): the key/value block around an asset's ID line. */
+  function formBlock(lines, idx) {
+    const page = lines[idx].page, pairs = [];
+    const two = l => l.cells && l.cells.length === 2;
+    let a = idx; while (a - 1 >= 0 && lines[a - 1].page === page && two(lines[a - 1])) a--;
+    let b = idx;
+    while (b + 1 < lines.length && lines[b + 1].page === page && b - idx < 40) {
+      const n = lines[b + 1];
+      TAG_RE.lastIndex = 0;
+      if (/designation|asset\s*(?:no|id)/i.test(n.cells[0]) && TAG_RE.test(n.text)) break;   // next asset's block
+      b++;
+      if (/^(?:level of risk|risk (?:level|rating))/i.test(n.cells[0])) break;
+    }
+    for (let i = a; i <= b; i++) if (two(lines[i])) pairs.push([lines[i].cells[0], lines[i].cells[1]]);
+    const get = re => { const p = pairs.find(([k]) => re.test(k)); return p ? p[1] : null; };
+    const loc = get(/^(?:location|building reference|position|sited)/i);
+    const vol = get(/\b(?:volume|capacity)\b/i);
+    const risk = get(/^(?:level of risk|risk (?:level|rating))/i);
+    return {
+      location: cleanLoc(loc),
+      volume: vol && /\d/.test(vol) ? numIn(vol) : null,
+      length: numIn(get(/\blength\b/i)),
+      risk: risk && /^[A-E]$/i.test(risk.trim()) ? risk.trim().toUpperCase() : null,
+    };
+  }
+
+  /* Outlet survey table — Ara layout: floor headings on their own line, the
+     room in the left column, and the outlets listed as "1 x M", "1 x Shwr",
+     "1 x C", "1 x Dishwasher" in the right-hand column. Cells wrap over several
+     lines, so each line is assigned to the nearest row by height on the page. */
+  const OUTLET_CODES = [
+    [/^(?:m|mx|mix|mixers?|mixer taps?)$/i, 'mixer', ''],
+    [/^(?:shwrs?|shrs?|sh|showers?|shower heads?)$/i, 'shower', ''],
+    [/^(?:tmvs?\d?)$/i, 'tmv', ''],
+    [/^(?:c|ct|cold|cold taps?)$/i, 'outlet', 'Cold tap'],
+    [/^(?:h|ht|hot|hot taps?)$/i, 'outlet', 'Hot tap'],
+    [/^(?:p|pillar taps?)$/i, 'outlet', 'Pillar taps'],
+    [/^(?:wcs?|urinals?|toilets?|cisterns?|ws|flush)$/i, null, ''],
+    [/^(?:sp|spray|spray taps?)$/i, 'outlet', 'Spray tap'],
+  ];
+  const CLARITY = /^(?:clear|cloudy|slightly cloudy|discoloured|discolored|turbid|brown|yellow|milky)$/i;
+  function surveyTable(lines) {
+    const out = [];
+    const pages = [...new Set(lines.filter(l => /\bclarity\b/i.test(l.text) || (l.cells || []).some(c => /^\d{1,2}\s*x\s*\S/i.test(c))).map(l => l.page))];
+    for (const pg of pages) {
+      const L = lines.filter(l => l.page === pg && l.y != null);
+      const anchors = L.filter(l => l.cells.some(c => CLARITY.test(c)));
+      if (!anchors.length || !L.some(l => l.cells.some(c => /^\d{1,2}\s*x\s*\S/i.test(c)))) continue;
+      const top = Math.max(...anchors.map(a => a.y)) + 60;
+      const heads = L.filter(l => l.cells.length === 1 && l.text.length < 25 && floorOf(l.text) && l.y <= top);
+      const body = L.filter(l => l.y <= top && !anchors.includes(l) && !heads.includes(l) && !/\bclarity|aerosol|location|temp\b/i.test(l.text));
+      const groups = anchors.map(a => ({ a, ls: [a] }));
+      for (const l of body) {
+        let best = null;
+        for (const g of groups) if (!best || Math.abs(g.a.y - l.y) < Math.abs(best.a.y - l.y)) best = g;
+        if (best && Math.abs(best.a.y - l.y) < 40) best.ls.push(l);
+      }
+      const leftX = Math.min(...[...anchors, ...body].map(l => l.xs ? l.xs[0] : Infinity));
+      for (const g of groups) {
+        g.ls.sort((p, q) => q.y - p.y);
+        const topY = g.ls[0].y;
+        const head = heads.filter(h => h.y >= topY - 2).sort((p, q) => p.y - q.y)[0];
+        const room = g.ls.filter(l => l.xs && l.xs[0] <= leftX + 12)
+          .map(l => l.cells[0]).filter(c => !/^\d|^\d{1,2}\s*x\s|^-$|^mains\b/i.test(c) && !CLARITY.test(c) && !(floorOf(c) && /\b(?:floor|level|basement|mezz|loft|roof)/i.test(c)))
+          .join(' ').replace(/\s*\/\s*/g, ' / ').replace(/\s+\/$/, '').trim();
+        const roomFloor = floorOf(room);
+        const floorName = roomFloor ? null : head ? floorOf(head.text) : null;
+        const location = cleanLoc([floorName ? head.text : '', room].filter(Boolean).join(', '));
+        for (const l of g.ls) for (const c of l.cells) {
+          const m = /^(\d{1,2})\s*x\s*(.+)$/i.exec(c); if (!m) continue;
+          const code = m[2].trim().replace(/[.,]$/, '');
+          const rule = OUTLET_CODES.find(([re]) => re.test(code));
+          const type = rule ? rule[1] : 'outlet';
+          if (!type) continue;
+          const name = rule ? rule[2] : code.replace(/\b\w/, ch => ch.toUpperCase());
+          for (let k = 0; k < Math.min(+m[1], 20); k++)
+            out.push({ type, tag: null, location, room, name, conf: 'high', src: g.a.text, fromTable: true });
+        }
+      }
+    }
+    return out;
+  }
+
   function detect(rawLines) {
-    const lines = stripRepeats(rawLines).map(l => ({ ...l }));
+    const lines = dropBoilerplate(stripRepeats(rawLines)).map(l => ({ ...l }));
     annotate(lines);
     const items = [];
 
@@ -302,8 +404,23 @@ const FMImport = (() => {
         if (volume == null && (t.type === 'heater' || t.type === 'tank' || t.type === 'softener')) volume = (l.fields && numIn(l.fields.volume)) || volumeIn(tx);
         if (length == null && t.type === 'deadleg') length = (l.fields && numIn(l.fields.length)) || lengthIn(tx);
       }
-      items.push({ type: t.type, tag: t.tag, location, volume, length, conf: 'high', src });
+      // a form-style register block around the defining line beats anything found in prose
+      let risk = null;
+      for (const i of t.def) {
+        const f = formBlock(lines, i);
+        if (f.location) { location = f.location; src = lines[i].text; }
+        if (f.volume != null) volume = f.volume;
+        if (f.length != null) length = f.length;
+        if (f.risk) risk = f.risk;
+        if (f.location) break;
+      }
+      items.push({ type: t.type, tag: t.tag, location, volume, length, risk, conf: 'high', src });
     }
+
+    /* 1b. Outlet survey table ("1 x M", "1 x Shwr" per room). */
+    const tableItems = surveyTable(lines);
+    const tableTypes = new Set(tableItems.map(i => i.type));
+    items.push(...tableItems);
 
     /* 2. Register rows: short structured lines naming an asset type and a place. */
     const rec = new Map();   // key → {type, location, perPage: Map(page→count), src}
@@ -311,7 +428,7 @@ const FMImport = (() => {
     lines.forEach((l, idx) => {
       const tx = l.text;
       if (isProse(tx) || /\.{4,}/.test(tx) || tx.length > 220) return;
-      const type = (l.fields && l.fields.type && classify(l.fields.type)) || classify(tx); if (!type || tagTypes.has(type)) return;
+      const type = (l.fields && l.fields.type && classify(l.fields.type)) || classify(tx); if (!type || tagTypes.has(type) || tableTypes.has(type)) return;
       let location = locOf(l, BY_TYPE[type].re);
       let block = [tx];
       // form-style register: "Asset Type: Shower" with "Location: …" on the following lines
@@ -335,6 +452,7 @@ const FMImport = (() => {
       if (r.length == null) r.length = (l.fields && numIn(l.fields.length)) || lengthIn(btx);
     });
     const recCount = {};
+    for (const it of tableItems) recCount[it.type] = (recCount[it.type] || 0) + 1;
     for (const r of rec.values()) {
       const n = Math.min(40, Math.max(...r.perPage.values()));   // same table repeated in another section → don't double up
       recCount[r.type] = (recCount[r.type] || 0) + n;
@@ -353,13 +471,20 @@ const FMImport = (() => {
         continue;
       }
       if (have || type === 'outlet' || type === 'pump') continue;
-      const mention = lines.find(l => !/\.{4,}/.test(l.text) && mentions(t, l.text));
+      const mention = lines.find(l => !/\.{4,}/.test(l.text) && mentions(t, l.text) && !(type === 'deadleg' && /\b(?:should|may|might|could|avoid|hidden|any|if|where)\b/i.test(l.text)));
       if (mention) items.push({ type, tag: null, location: null, conf: 'low', src: mention.text, note: 'Mentioned — quantity not stated' });
     }
 
     /* Floors, rooms, labels. */
+    for (const it of items) it.floor = floorOf(it.location);
+    // "Rear WC cupboard" has no floor, but the survey table puts "Rear WC" on the Ground Floor
+    const roomFloors = items.filter(i => i.fromTable && i.floor && i.room && i.room.length >= 4).map(i => [i.room.toLowerCase().split(' / ')[0], i.floor]);
     for (const it of items) {
-      it.floor = floorOf(it.location);
+      if (!it.floor && it.location) {
+        const loc = it.location.toLowerCase();
+        const hit = roomFloors.filter(([r]) => loc.includes(r)).sort((p, q) => q[0].length - p[0].length)[0];
+        if (hit) it.floor = hit[1];
+      }
       it.room = roomOf(it.location, it.floor);
       if (it.src && it.src.length > 160) it.src = it.src.slice(0, 157) + '…';
     }
@@ -370,7 +495,7 @@ const FMImport = (() => {
     for (const it of items) {
       if (it.tag) { it.label = BY_TYPE[it.type].auto === '' && it.type !== 'deadleg' ? '' : it.tag; continue; }
       const p = BY_TYPE[it.type].auto;
-      if (!p) { it.label = ''; continue; }
+      if (!p) { it.label = it.type === 'outlet' && it.name && !/\btaps?\b/i.test(it.name) ? it.name : ''; continue; }
       let n = nextNo[p] || 1; while (used.has(p + n)) n++;
       it.label = p + n; used.add(it.label); nextNo[p] = n + 1;
     }
@@ -380,22 +505,42 @@ const FMImport = (() => {
 
   /* ---------------- title block ---------------- */
   const POSTCODE = /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/;
+  const SEP = '\\s*(?:[:|\\-–]\\s*)';
   function titleFields(lines) {
-    const grab = (re, multi) => {
+    // value of a "Label | value" / "Label: value" field, accepting the first value `ok` approves
+    const grab = (labels, ok, multi) => {
+      const re = new RegExp(`^(?:${labels})${SEP}(.*)$`, 'i');
       for (let i = 0; i < lines.length; i++) {
         const m = re.exec(lines[i].text); if (!m) continue;
-        let v = (m[1] || '').replace(/^[\s:|\-–]+/, '').split(' | ')[0].trim();
-        const next = lines[i + 1] && lines[i + 1].page === lines[i].page ? lines[i + 1].text.split(' | ')[0].trim() : '';
-        if (!v && next && !/:\s*$/.test(next)) v = next;
-        else if (multi && v && !POSTCODE.test(v) && POSTCODE.test(next) && next.length < 60) v += ', ' + next;
+        let v = m[1].replace(/^[\s:|\-–]+/, '').split(' | ')[0].trim();
+        const nxt = k => { const n = lines[i + k]; return n && n.page === lines[i].page && !n.text.includes(' | ') && !/:/.test(n.text) && n.text.length < 50 ? n.text.trim() : null; };
+        if (!v) v = nxt(1) || '';
+        else if (multi && !POSTCODE.test(v)) {
+          // address continues on the following single-cell lines, up to the postcode
+          for (let k = 1; k <= 4; k++) { const n = nxt(k); if (!n) break; v += ', ' + n; if (POSTCODE.test(n)) break; }
+        }
         v = v.replace(/^[:\-–\s]+/, '').trim();
-        if (v && v.length >= 2 && v.length < 120) return v;
+        if (v && v.length < 120 && (!ok || ok(v))) return v;
       }
       return null;
     };
-    const customer = grab(/^(?:client(?:\s*name)?|customer(?:\s*name)?|prepared for|company(?:\s*name)?)\s*[:|\-–]?\s*(.*)$/i);
-    const site = grab(/^(?:site address|property address|premises address|address of (?:site|premises)|site location|site(?:\s*name)?|address)\s*[:|\-–]?\s*(.*)$/i, true);
-    let date = grab(/^(?:date of (?:assessment|survey|inspection|site visit|visit)|assessment date|survey date|inspection date|date assessed|date of report|report date|date)\s*[:|\-–]?\s*(.*)$/i);
+    const notBlank = v => !/^(?:n\/?a|none|tbc|-+)$/i.test(v);
+    let customer = grab('client(?:\\s*name)?|customer(?:\\s*name)?|prepared for|company(?:\\s*name)?|organisation', notBlank);
+    let site = grab('site address|property address|premises address|address of (?:site|premises)|site location|site|address', notBlank, true);
+    let date = grab('date of (?:assessment|survey|inspection|site visit|visit)|assessment date|survey date|inspection date|date assessed|date of report|report date|date', v => !!normDate(v));
+    if (!date) { const l = lines.find(l => /\b(?:survey|assessment|inspection)\b[^|]*\bcarried out on\b/i.test(l.text) && normDate(l.text)); if (l) date = l.text; }
+    // Cover page: "… in / <Customer> / <address lines> / <Assessor company>"
+    const cover = lines.filter(l => l.page === lines[0]?.page);
+    const inAt = cover.findIndex(l => /^(?:in|for|at|prepared for)$/i.test(l.text.trim()));
+    if (inAt >= 0) {
+      const rest = cover.slice(inAt + 1).map(l => l.text.trim()).filter(t => !/[|:]/.test(t));
+      if (!customer && rest[0]) customer = rest[0];
+      if (!site) {
+        const addr = [];
+        for (const t of rest.slice(1, 7)) { if (/\b(?:ltd|limited|plc|environmental|survey carried|risk assessment)\b/i.test(t)) break; addr.push(t); if (POSTCODE.test(t)) break; }
+        if (addr.length) site = addr.join(', ');
+      }
+    }
     if (date) date = normDate(date);
     return { customer, site, date };
   }
@@ -476,6 +621,8 @@ const FMImport = (() => {
         if (it.location) props.location = it.location;
         if (it.volume) props.volume = String(it.volume);
         if (it.type === 'deadleg' && it.length) props.notes = it.length + ' mm';
+        if (it.name) props.notes = it.name;
+        if (it.risk) props.risk = it.risk;
         nodes.push({ type, x: sn(cx), y: sn(cy), w: a.w, h: a.h, label: it.label || '', props });
       }
     });
@@ -555,7 +702,7 @@ if (typeof document !== 'undefined') {
         h += `<label class="det-row${low ? ' low' : ''}" title="${esc('From the report: ' + (it.src || ''))}">`
           + `<input type="checkbox" data-idx="${i}" data-type="${type}" ${low ? '' : 'checked'}>`
           + `<span class="tag">${esc(it.label || '•')}</span>`
-          + `<span class="desc">${esc(it.volume ? it.volume + ' litres' : it.type === 'deadleg' && it.length ? it.length + ' mm deadleg' : FMImport.DESC[type])}${low ? ' <em class="chk">check</em>' : ''}</span>`
+          + `<span class="desc">${esc(it.volume ? it.volume + ' litres' : it.type === 'deadleg' && it.length ? it.length + ' mm deadleg' : (it.name || FMImport.DESC[type]))}${it.risk ? ' · risk ' + esc(it.risk) : ''}${low ? ' <em class="chk">check</em>' : ''}</span>`
           + `<span class="loc">${esc(it.note || where)}</span></label>`;
       }
     }
