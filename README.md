@@ -86,7 +86,11 @@ from the PDF text, then detects assets in order of reliability:
 
 Floors are read from each asset's location (Roof, Loft, Second–Ground Floor,
 Mezzanine, Basement, External…) and only floors that hold assets become areas,
-stacked highest first and fitted inside the sheet above the title block. The
+stacked highest first and fitted inside the sheet above the title block.
+Within each floor, assets are grouped by the room they were found in (plant
+rooms first, then A–Z) and each group gets the room name as a label above it,
+so every asset arrives paired with its room. Untick *Room labels* in the review
+list to place them without. The
 customer, site address and assessment date are offered for the title block.
 Hover a row in the review list to see the report line it came from; **Copy
 report text** copies what was read, which helps tune detection for a new

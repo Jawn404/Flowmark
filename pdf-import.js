@@ -5,7 +5,7 @@
    A4 sheet grouped into floor areas.
 
    Loaded after app.js and uses its globals (state, ASSETS, snap,
-   pageDims, FOOT_H, showFooter, ZONE_COLORS, snapshot, commit,
+   pageDims, FOOT_H, showFooter, ZONE_COLORS, _measCtx, textFont, snapshot, commit,
    fitView, toast, esc, loadScript, closeMenu, uid, $ / $$).
 
    The detection and layout code (FMImport) is pure — no DOM — so it
@@ -149,10 +149,17 @@ const FMImport = (() => {
     }
     return null;
   }
-  function roomOf(loc, floor) {
+  function roomOf(loc, floor, keepCase) {
     if (!loc) return '';
     let r = floor ? loc.replace(floor.match, '') : loc;
-    return r.replace(/^[\s,\-–/]+|[\s,\-–/]+$/g, '').toLowerCase();
+    r = r.replace(/^[\s,\-–/]+|[\s,\-–/]+$/g, '').replace(/\s{2,}/g, ' ');
+    return keepCase ? r : r.toLowerCase();
+  }
+  /* Display form of a room name for its label on the sheet. */
+  function roomTitle(r) {
+    r = (r || '').replace(/…$/, '').trim();
+    if (!r || /^(?:n\/?a|-+)$/i.test(r)) return '';
+    return r === r.toLowerCase() ? r.replace(/\b[a-z]/g, ch => ch.toUpperCase()) : r.charAt(0).toUpperCase() + r.slice(1);
   }
 
   /* ---------------- counts ---------------- */
@@ -485,7 +492,8 @@ const FMImport = (() => {
         const hit = roomFloors.filter(([r]) => loc.includes(r)).sort((p, q) => q[0].length - p[0].length)[0];
         if (hit) it.floor = hit[1];
       }
-      it.room = roomOf(it.location, it.floor);
+      it.roomName = roomTitle(roomOf(it.location, it.floor, true));
+      it.room = it.roomName.toLowerCase();
       if (it.src && it.src.length > 160) it.src = it.src.slice(0, 157) + '…';
     }
     const used = new Set(items.filter(i => i.tag).map(i => i.tag));
@@ -559,11 +567,15 @@ const FMImport = (() => {
   /* ---------------- layout ----------------
      One area per floor (only floors that actually hold assets), stacked
      with the highest level at the top, sized to their contents and kept
-     inside the sheet above the title-block footer. Plant goes first in
-     each area, then assets grouped by room. */
+     inside the sheet above the title-block footer. Within each floor the
+     assets are clustered by room — plant rooms first — and each cluster
+     gets the room's name as a label above it, so every asset sits with the
+     room it was found in. Clusters flow left to right and wrap into bands.
+     `o.rooms === false` drops the room labels and packs each floor as one run. */
   function layout(items, o) {
     const G = o.grid || 20;
     const sn = v => Math.round(v / G) * G;
+    const withRooms = o.rooms !== false;
     const floors = new Map();
     for (const it of items) if (it.floor) floors.set(it.floor.name, it.floor.level);
     const UNK = 'Location not stated';
@@ -575,58 +587,118 @@ const FMImport = (() => {
     }
     const levelOf = n => n === UNK ? -1000 : n === '' ? 0 : floors.get(n);
     const names = [...groups.keys()].sort((a, b) => levelOf(b) - levelOf(a));
-    for (const n of names) groups.get(n).sort((a, b) => {
+    const byAsset = (a, b) => {
       const pa = PLANT.has(a.type) ? 0 : 1, pb = PLANT.has(b.type) ? 0 : 1;
-      return pa - pb || (pa ? a.room.localeCompare(b.room) : 0) || ORDER.indexOf(a.type) - ORDER.indexOf(b.type) || tagNum(a.label || '') - tagNum(b.label || '');
-    });
+      return pa - pb || ORDER.indexOf(a.type) - ORDER.indexOf(b.type) || tagNum(a.label || '') - tagNum(b.label || '');
+    };
+    // floor → room clusters: plant rooms first, then rooms A–Z, unnamed last
+    const clustersOf = new Map();
+    for (const n of names) {
+      const list = groups.get(n);
+      let cl;
+      if (!withRooms) cl = [{ name: '', items: list.slice().sort((a, b) => byAsset(a, b) || (a.room || '').localeCompare(b.room || '')) }];
+      else {
+        const m = new Map();
+        for (const it of list) {
+          const k = (it.roomName || '').toLowerCase();
+          if (!m.has(k)) m.set(k, { name: it.roomName || '', items: [] });
+          m.get(k).items.push(it);
+        }
+        cl = [...m.values()];
+        for (const c of cl) { c.items.sort(byAsset); c.plant = c.items.some(i => PLANT.has(i.type)); }
+        cl.sort((a, b) => (!a.name) - (!b.name) || (b.plant ? 1 : 0) - (a.plant ? 1 : 0) || a.name.localeCompare(b.name));
+      }
+      clustersOf.set(n, cl);
+    }
 
-    const M = 40, X0 = o.x0 || 0;
+    const M = 40, X0 = o.x0 || 0, PAD = 20;
     const left = X0 + M, right = X0 + o.pageW - M, top = M, bottom = o.pageH - o.footH - 20;
-    const tries = [{ cw: 80, ch: 84, head: 40, gap: 20 }, { cw: 70, ch: 72, head: 36, gap: 16 }, { cw: 60, ch: 62, head: 32, gap: 12 }];
+    const tries = [
+      { cw: 80, ch: 84, head: 40, gap: 20, ls: 12, cgap: 24, bgap: 8 },
+      { cw: 70, ch: 72, head: 36, gap: 16, ls: 11, cgap: 18, bgap: 6 },
+      { cw: 60, ch: 62, head: 32, gap: 12, ls: 10, cgap: 14, bgap: 4 },
+    ];
+    // rough bold-label width when no measurer is supplied (Node tests)
+    const measure = o.measure || ((s, px) => s.length * px * 0.58);
     let plan;
     for (const t of tries) {
       plan = planWith(t); if (plan.h <= bottom - top) break;
     }
     function planWith(t) {
-      const innerW = right - left - 2 * 20;
+      const innerW = right - left - 2 * PAD;
       const cols = Math.max(1, Math.floor(innerW / t.cw));
-      let y = 0, used = 0; const zs = [];
+      const lineH = Math.round(t.ls * 1.3);
+      let y = 0, usedW = 0; const zs = [];
       for (const n of names) {
-        const list = groups.get(n); let col = 0, row = 0; const pos = [];
-        for (const it of list) {
-          const a = o.assets[NODE_TYPE[it.type]];
-          const span = Math.max(1, Math.ceil((a.w + 22) / t.cw));
-          if (col + span > cols) { col = 0; row++; }
-          pos.push({ it, col, row, span }); col += span; used = Math.max(used, col);
+        // size each room cluster: assets on a column grid, label wrapped to the cluster width
+        const cls = clustersOf.get(n).map(c => {
+          const spans = c.items.map(it => Math.max(1, Math.ceil((o.assets[NODE_TYPE[it.type]].w + 22) / t.cw)));
+          const total = spans.reduce((s, v) => s + v, 0);
+          const lw = c.name ? measure(c.name, t.ls) + 8 : 0;
+          const labelCols = c.name ? Math.min(cols, 3, Math.max(1, Math.ceil(lw / t.cw))) : 0;
+          const w = Math.min(cols, Math.max(Math.min(total, cols), labelCols, 1));
+          let col = 0, row = 0; const pos = [];
+          c.items.forEach((it, i) => {
+            const span = Math.min(spans[i], w);
+            if (col + span > w) { col = 0; row++; }
+            pos.push({ it, col, row, span }); col += span;
+          });
+          const rows = c.items.length ? row + 1 : 0;
+          const wrapW = w * t.cw - 8;
+          const lines = c.name ? Math.min(3, Math.max(1, Math.ceil(lw / wrapW))) : 0;
+          return { name: c.name, w, pos, rows, labelH: lines ? lines * lineH + 4 : 0, wrapW };
+        });
+        // flow clusters left→right, wrapping into bands
+        const bands = []; let band = null;
+        for (const c of cls) {
+          const cwW = c.w * t.cw;
+          if (!band || band.x + (band.items.length ? t.cgap : 0) + cwW > innerW) { band = { x: 0, items: [] }; bands.push(band); }
+          if (band.items.length) band.x += t.cgap;
+          c.x = band.x; band.x += cwW; band.items.push(c);
+          usedW = Math.max(usedW, band.x);
         }
-        const rows = list.length ? row + 1 : 0;
-        const h = t.head + rows * t.ch + 4;
-        zs.push({ name: n, y, h, pos }); y += h + t.gap;
+        let by = 0;
+        for (const bd of bands) {
+          bd.y = by;
+          bd.labelH = Math.max(0, ...bd.items.map(c => c.labelH));
+          bd.h = bd.labelH + Math.max(0, ...bd.items.map(c => c.rows)) * t.ch;
+          by += bd.h + t.bgap;
+        }
+        const bodyH = bands.length ? by - t.bgap : 0;
+        const h = t.head + bodyH + 4;
+        zs.push({ name: n, y, h, bands });
+        y += h + t.gap;
       }
       // Areas share one width, sized to the fullest floor plus a spare column for
       // pipework — not the full sheet, so the legend keeps a clear corner.
-      const w = Math.min(right - left, 40 + Math.max(used + 1, 6) * t.cw);
-      return { t, zs, h: y - t.gap, w };
+      const w = Math.min(right - left, 2 * PAD + Math.max(usedW + t.cw, 6 * t.cw));
+      return { t, zs, h: y - t.gap, w, lineH };
     }
     const { t, zs, w: zoneW } = plan;
-    const zones = [], nodes = [];
+    const zones = [], nodes = [], texts = [];
     zs.forEach((z, zi) => {
       const zy = top + z.y;
       if (z.name) zones.push({ label: z.name, x: left, y: zy, w: sn(zoneW), h: sn(z.h), color: o.colors[zi % o.colors.length] });
-      for (const p of z.pos) {
-        const it = p.it, type = NODE_TYPE[it.type], a = o.assets[type];
-        const cx = left + 20 + (p.col + p.span / 2) * t.cw;
-        const cy = zy + t.head + p.row * t.ch + t.ch / 2 - 8;
-        const props = {};
-        if (it.location) props.location = it.location;
-        if (it.volume) props.volume = String(it.volume);
-        if (it.type === 'deadleg' && it.length) props.notes = it.length + ' mm';
-        if (it.name) props.notes = it.name;
-        if (it.risk) props.risk = it.risk;
-        nodes.push({ type, x: sn(cx), y: sn(cy), w: a.w, h: a.h, label: it.label || '', props });
+      for (const bd of z.bands) for (const c of bd.items) {
+        const cx0 = left + PAD + c.x, by0 = zy + t.head + bd.y;
+        if (c.name) texts.push({ x: Math.round(cx0 + 4), y: Math.round(by0 + t.ls), text: c.name, size: t.ls, wrap: Math.round(c.wrapW), align: 'left', bold: true, color: '#33485f', room: true });
+        for (const p of c.pos) {
+          const it = p.it, type = NODE_TYPE[it.type], a = o.assets[type];
+          const cx = cx0 + (p.col + p.span / 2) * t.cw;
+          let cy = sn(by0 + bd.labelH + p.row * t.ch + t.ch / 2 - 8);
+          // grid-snapping mustn't nudge an asset up into its room label
+          if (bd.labelH && cy - a.h / 2 - 6 < by0 + bd.labelH) cy += G;
+          const props = {};
+          if (it.location) props.location = it.location;
+          if (it.volume) props.volume = String(it.volume);
+          if (it.type === 'deadleg' && it.length) props.notes = it.length + ' mm';
+          if (it.name) props.notes = it.name;
+          if (it.risk) props.risk = it.risk;
+          nodes.push({ type, x: sn(cx), y: sn(cy), w: a.w, h: a.h, label: it.label || '', props });
+        }
       }
     });
-    return { zones, nodes, overflow: plan.h > bottom - top };
+    return { zones, nodes, texts, overflow: plan.h > bottom - top };
   }
 
   return { itemsToLines, stripRepeats, detect, layout, floorOf, normDate, CATEGORY, DESC, ORDER };
@@ -708,6 +780,9 @@ if (typeof document !== 'undefined') {
     }
     const floors = [...new Set(items.filter(i => i.floor).map(i => i.floor.name))];
     if (floors.length) h += `<div class="det-group">Areas to create</div><div class="import-note" style="margin-top:0">${floors.map(esc).join(' · ')}${items.some(i => !i.floor) && floors.length > 1 ? ' · Location not stated' : ''}</div>`;
+    const rooms = [...new Set(items.map(i => i.roomName).filter(Boolean))];
+    if (rooms.length) h += `<div class="det-group"><label><input type="checkbox" id="importRooms" checked>Room labels <span class="det-n">${rooms.length}</span></label></div>`
+      + `<div class="import-note" style="margin-top:0">Assets are grouped by room within each floor, with the room name above them: ${rooms.slice(0, 12).map(esc).join(' · ')}${rooms.length > 12 ? ` · +${rooms.length - 12} more` : ''}</div>`;
 
     $('#importBody').innerHTML = h;
     $$('#importBody .det-all').forEach(all => all.onchange = () => {
@@ -757,13 +832,17 @@ if (typeof document !== 'undefined') {
     const L = FMImport.layout(picked, {
       pageW: d.w, pageH: d.h, footH: showFooter ? FOOT_H : 0, grid: GRID,
       x0: busy ? d.w + 80 : 0, assets: ASSETS, colors: ZONE_COLORS,
+      rooms: !$('#importRooms') || $('#importRooms').checked,
+      measure: (s, px) => { _measCtx.font = textFont({ bold: true }, px); return _measCtx.measureText(s).width; },
     });
     for (const z of L.zones) state.zones.push({ id: uid(), ...z });
     for (const n of L.nodes) state.nodes.push({ id: uid(), ...n });
+    for (const { room, ...t } of L.texts) state.texts.push({ id: uid(), ...t });
     commit(); fitView();
     const msg = !picked.length ? 'Title block updated'
       : busy ? 'Placed beside the sheet (it already had content) — drag into place'
       : L.overflow ? 'Placed — too many to fit the sheet, so areas run below it. Try portrait, or trim the list.'
+      : L.texts.length ? 'Assets placed by floor and room — drag to reposition and add pipework'
       : 'Assets placed by floor — drag to reposition and add pipework';
     toast(msg, 3400);
   }
