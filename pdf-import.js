@@ -79,7 +79,7 @@ const FMImport = (() => {
     { type: 'heater', prefix: ['WH', 'CAL', 'HWC'], auto: 'WH', re: /\b(?:calorifiers?|(?:hot )?water heaters?|(?:hot water|unvented|vented|indirect|direct) cylinders?|unvented units?|combi(?:nation)? boilers?|point[- ]of[- ]use (?:water )?heaters?|POU (?:water )?heaters?|under[- ]?sink (?:water )?heaters?|instantaneous (?:water )?heaters?|multi-?point (?:water )?heaters?)\b/i },
     { type: 'shower', prefix: ['SH'], auto: '', re: /\b(?:showers?|shower ?heads?|shower units?|shower valves?)\b/i, not: /\bshower ?(?:rooms?|trays?|curtains?|screens?|cubicles?|enclosures?)\b/i },
     { type: 'tmv', prefix: ['TMV'], auto: 'T', re: /\b(?:TMV ?[23]?s?|thermostatic mixing valves?|thermostatic mixers?|blending valves?)\b/i },
-    { type: 'mixer', prefix: ['MX'], auto: 'M', re: /\b(?:mixer taps?|monobloc(?: mixers?| taps?)?|(?:basin|sink|bath) mixers?)\b/i },
+    { type: 'mixer', prefix: ['MX'], auto: '', re: /\b(?:mixer taps?|monobloc(?: mixers?| taps?)?|(?:basin|sink|bath) mixers?)\b/i },
     { type: 'outlet', prefix: [], auto: '', re: /\b(?:wash hand basins?|WHBs?|hand ?wash basins?|cleaner'?s?'? sinks?|sinks?|basins?|baths?|bib taps?|pillar taps?|taps?|drinking (?:water )?(?:fountains?|points?)|eye ?wash(?: stations?)?|hose ?reels?|spray taps?|outlets?)\b/i, not: /\b(?:sentinel outlets?|outlets? (?:temperatures?|temps?)|all outlets|outlets? (?:should|must|were|are))\b/i },
   ];
   const BY_TYPE = Object.fromEntries(TYPES.map(t => [t.type, t]));

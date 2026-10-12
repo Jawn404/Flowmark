@@ -28,7 +28,7 @@ const ASSETS = {
   boiler:   { w: 52, h: 60, name: 'Steam boiler', tag: 'SB', fields: ['volume', 'risk'] },
   pump:   { w: 30, h: 30, name: 'Pump', tag: 'P', fields: [] },
   tmv:    { w: 28, h: 28, name: 'Thermostatic mixing valve', tag: 'T', fields: ['risk'] },
-  mixer:  { w: 28, h: 28, name: 'Mixer tap', tag: 'M', fields: [] },
+  mixer:  { w: 28, h: 28, name: 'Mixer tap', tag: 'M', fields: [], noAutoLabel: true },
   shower: { w: 32, h: 36, name: 'Shower', tag: 'SH', fields: ['risk'], noAutoLabel: true },
   outlet: { w: 22, h: 22, name: 'Outlet / tap', tag: '', fields: [] },
   cap:    { w: 22, h: 22, name: 'Capped / blanked end', tag: '', fields: [] },
