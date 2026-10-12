@@ -678,7 +678,7 @@ const FMImport = (() => {
     const zones = [], nodes = [], texts = [];
     zs.forEach((z, zi) => {
       const zy = top + z.y;
-      if (z.name) zones.push({ label: z.name, x: left, y: zy, w: sn(zoneW), h: sn(z.h), color: o.colors[zi % o.colors.length] });
+      if (z.name) zones.push({ label: z.name, x: left, y: zy, w: sn(zoneW), h: Math.ceil(z.h / G) * G, color: o.colors[zi % o.colors.length] });
       for (const bd of z.bands) for (const c of bd.items) {
         const cx0 = left + PAD + c.x, by0 = zy + t.head + bd.y;
         if (c.name) texts.push({ x: Math.round(cx0 + 4), y: Math.round(by0 + t.ls), text: c.name, size: t.ls, wrap: Math.round(c.wrapW), align: 'left', bold: true, color: '#33485f', room: true });
@@ -687,7 +687,7 @@ const FMImport = (() => {
           const cx = cx0 + (p.col + p.span / 2) * t.cw;
           let cy = sn(by0 + bd.labelH + p.row * t.ch + t.ch / 2 - 8);
           // grid-snapping mustn't nudge an asset up into its room label
-          if (bd.labelH && cy - a.h / 2 - 6 < by0 + bd.labelH) cy += G;
+          if (bd.labelH && cy - a.h / 2 < by0 + bd.labelH - 2) cy += G;
           const props = {};
           if (it.location) props.location = it.location;
           if (it.volume) props.volume = String(it.volume);

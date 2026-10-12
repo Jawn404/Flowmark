@@ -2788,7 +2788,21 @@ function loadSample() {
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; $('#menuInstall').style.display = 'block'; });
 function triggerInstall() { if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; } else toast('Use your browser menu → Add to Home Screen / Install'); }
-if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => { }));
+/* The worker serves the cached app first, so a fresh deploy only lands once
+   the new worker takes over. When it does, reload into the new version
+   (saving first) — unless a dialog is open, in which case just say so. */
+if ('serviceWorker' in navigator) {
+  const hadWorker = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadWorker || reloading) return;   // first install: already running the current files
+    if ([...document.querySelectorAll('.modal-backdrop')].some(m => !m.hidden)) { toast('FlowMark has updated — reload to use the new version', 6000); return; }
+    reloading = true;
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { }
+    location.reload();
+  });
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => { }));
+}
 
 /* ============================================================
    INIT
